@@ -135,6 +135,24 @@ html.noscroll .qnav{width:44px;height:44px;font-size:28px;opacity:.85}
 @media (min-width:861px){.qnav.next{right:max(10px,calc((100vw - 1120px)/2 - 66px))}.qnav.prev{left:max(10px,calc((100vw - 1120px)/2 - 66px))}}
 @media print{.qnav{display:none !important}}
 .ink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply}
+canvas.qnote{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply}
+dialog.noteed{width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;border-radius:0;padding:0;display:none;flex-direction:column}
+dialog.noteed[open]{display:flex}
+.ne-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:calc(6px + env(safe-area-inset-top,0px)) 10px 6px;border-bottom:1px solid var(--line);background:var(--sheet)}
+.ne-bar .ne-title{font-size:14px;color:var(--ink-2);max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ne-tools{display:flex;gap:2px;align-items:center}
+.ne-tools button{width:38px;height:38px;border:0;border-radius:8px;background:none;display:grid;place-items:center;color:var(--ink-2);padding:0}
+.ne-tools button[aria-pressed="true"]{background:var(--omr-soft);color:var(--omr)}
+.ne-tools svg{width:20px;height:20px}
+.ne-tools .sw{width:16px;height:16px;border-radius:50%}
+.ne-body{flex:1;overflow:auto;padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px));background:var(--paper)}
+.ne-wrap{position:relative;max-width:1000px;margin:0 auto;background:#fff;border-radius:6px;overflow:hidden}
+.ne-wrap img{width:100%;height:auto;display:block}
+#neCv{position:absolute;inset:0;width:100%;height:100%;touch-action:none;mix-blend-mode:multiply}
+#neExpl{max-width:1000px;margin:14px auto 0}
+.padarea{background:#fff;background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 31px,#eef0f3 31px,#eef0f3 32px);border-top:1px dashed #d5d8de}
+.padarea[style*="padding-top: 0"],.padarea:not([style]){border-top:0}
+#neExpl:empty{display:none}
 body.drawing .ink{pointer-events:auto;touch-action:none;cursor:crosshair}
 body.drawing.erasing .ink{cursor:cell}
 .inkbar{position:fixed;left:20px;bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:8;display:flex;align-items:center;gap:2px;background:var(--sheet);border:1px solid var(--line);border-radius:12px;padding:5px;box-shadow:0 6px 20px rgba(0,0,0,.14)}
@@ -315,7 +333,29 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
   <button class="btn" id="mSubmit">제출</button>
 </div>
 
-<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><img id="zoomImg" alt=""></div><div id="zoomExpl" class="expl"></div></dialog>
+<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><button class="btn" id="zNote">필기하기</button><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><div style="position:relative"><img id="zoomImg" alt=""><div id="zPad" class="padarea"></div><canvas class="qnote" id="zNoteCv"></canvas></div></div><div id="zoomExpl" class="expl"></div></dialog>
+<dialog id="noteEd" class="noteed" aria-label="문제 필기">
+  <div class="ne-bar">
+    <div class="ne-tools">
+      <button data-ntool="red" title="빨간 펜 (P)" aria-label="빨간 펜"><span class="sw" style="background:#E0283C"></span></button>
+      <button data-ntool="black" title="검은 펜 (B)" aria-label="검은 펜"><span class="sw" style="background:#111;box-shadow:0 0 0 1px var(--line)"></span></button>
+      <button data-ntool="hl" title="형광펜 (H)" aria-label="형광펜"><span class="sw" style="background:#FFD400;border-radius:3px;width:20px;height:10px"></span></button>
+      <button data-ntool="eraser" title="지우개 (E)" aria-label="지우개"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M16 3l5 5-11 11H5l-2-2z"/><path d="M9 10l5 5"/><path d="M10 19h11"/></svg></button>
+      <button data-nact="undo" title="되돌리기 (Z)" aria-label="되돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
+      <button data-nact="clear" title="필기 모두 지우기" aria-label="필기 모두 지우기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+    </div>
+    <button class="btn ghost" data-nact="padplus" title="아래 여백 늘리기">여백 +</button>
+    <button class="btn ghost" data-nact="padminus" id="nePadMinus" title="아래 여백 줄이기">여백 −</button>
+    <span class="ne-title" id="neTitle"></span>
+    <span style="flex:1"></span>
+    <span class="note" id="neSaved"></span>
+    <button class="btn ghost" data-nact="prev" id="nePrev" aria-label="이전 문제">‹</button>
+    <span class="note" id="nePos"></span>
+    <button class="btn ghost" data-nact="next" id="neNext" aria-label="다음 문제">›</button>
+    <button class="btn primary" data-nact="close">완료</button>
+  </div>
+  <div class="ne-body"><div class="ne-wrap"><img id="neImg" alt="문제 이미지"><div id="nePad" class="padarea"></div><canvas id="neCv"></canvas></div><div id="neExpl" class="expl"></div></div>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>/* JSZip (MIT) */
@@ -577,6 +617,7 @@ function renderExam(){
     <div class="exam-head">
       <div><h1>${h(subjLabel)} 모의고사</h1><span class="note">${!exam.paper && viewOne() ? `<b id="qPos" style="color:var(--omr)"></b> · ` : ""}${exam.ids.length}문항 · 제한 ${Math.round(exam.limitSec/60)}분</span></div>
       <div class="tools">
+        ${!exam.paper && exam.ids.some(id => { const q = S.questions.get(id); return q && q.note && q.note.length; }) ? `<button class="btn" id="noteBtn">${showNotes() ? "내 필기 숨기기" : "내 필기 보기"}</button>` : ""}
         ${exam.paper ? "" : `<button class="btn" id="viewBtn">${viewOne() ? "전체 스크롤로 보기" : "한 문제씩 보기"}</button>`}
         <button class="btn" id="paperBtn" aria-pressed="${!!exam.paper}">${exam.paper ? "문제 이미지 보기" : "종이로 풀기"}</button>
         <button class="btn" id="printBtn">인쇄</button>
@@ -596,7 +637,7 @@ function renderExam(){
         return `<section class="q" id="q-${i}" data-i="${i}">
           <div class="qtop"><span class="qnum">${i+1}.</span>${q.tag ? `<span class="qtag">${h(q.tag)}</span>` : ""}
             <button class="flag" data-flag="${i}" aria-pressed="${!!exam.flags[i]}">헷갈림</button></div>
-          <div class="qimg"><img src="${h(Store.img(q))}" alt="${i+1}번 문제" loading="${i < 3 ? "eager" : "lazy"}">${exam.paper ? "" : `<canvas class="ink" data-ink="${i}"></canvas>`}</div>
+          <div class="qimg"><img src="${h(Store.img(q))}" alt="${i+1}번 문제" loading="${i < 3 ? "eager" : "lazy"}">${!exam.paper && showNotes() && q.note && q.note.length ? `<canvas class="qnote" data-note="${q.id}"></canvas>` : ""}${exam.paper ? "" : `<canvas class="ink" data-ink="${i}"></canvas>`}</div>
           <div class="choices">${Array.from({length: q.choices || ch}, (_, c) => `<button class="bub" data-q="${i}" data-c="${c+1}" aria-pressed="${exam.answers[i]===c+1}" aria-label="${i+1}번 ${c+1}번 선택">${c+1}</button>`).join("")}</div>
         </section>`;}).join("")}</div>
       <aside class="omr" aria-label="답안지">
@@ -643,6 +684,8 @@ function renderExam(){
   $("#quit").onclick = () => { if (confirm("이 시험을 기록 없이 끝낼까요?")) { exam = null; ls.del("gm-exam"); render(); } };
 
   if (!exam.paper) setupInk();
+  setupNoteCanvases();
+  if ($("#noteBtn")) $("#noteBtn").onclick = () => { ls.set("gm-shownotes", !showNotes()); const keep = curIdx; renderExam(); goQ(keep); };
   if ($("#viewBtn")) $("#viewBtn").onclick = () => { ls.set("gm-viewmode", viewOne() ? "scroll" : "one"); const keep = curIdx; renderExam(); goQ(keep); };
   if (viewOne()){
     $("#qPrev").onclick = () => goQ(curIdx - 1);
@@ -701,6 +744,9 @@ async function printExam(){
   toast("시험지를 준비하고 있어요…");
   await Promise.all(imgs.map(im => im.complete ? 0 : new Promise(r => { im.onload = im.onerror = r; })));
   const originals = imgs.map(im => im.src), lvl = printInk();
+  if (showNotes()){
+    for (let k = 0; k < imgs.length; k++){ const q = S.questions.get(exam.ids[k]); if (q && q.note && q.note.length){ try { imgs[k].src = await mergeNote(imgs[k].src, q.note); } catch {} } }
+  }
   if (lvl){
     for (const im of imgs){ try { im.src = await inkImage(im.src, lvl); } catch {} }
     await Promise.all(imgs.map(im => im.complete ? 0 : new Promise(r => { im.onload = im.onerror = r; })));
@@ -728,6 +774,7 @@ async function downloadPrintable(){
       const r = await fetch(Store.img(q)); return blobToDataURL(await r.blob());
     }));
     const date = new Date(exam.startAt).toLocaleDateString("ko-KR");
+    if (showNotes()) for (let k = 0; k < imgs.length; k++){ const q = S.questions.get(exam.ids[k]); if (q && q.note && q.note.length){ try { imgs[k] = await mergeNote(imgs[k], q.note); } catch {} } }
     const inked = printInk() ? await Promise.all(imgs.map(src => inkImage(src, printInk()).catch(() => src))) : imgs;
     const html = `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>${h(subjLabel)} 모의고사 ${date}</title>
 <style>@page{size:${sp.size};margin:8mm 7mm}body{margin:0;font-family:"Nanum Myeongjo","AppleMyungjo","Batang",serif;color:#000;background:#fff}
@@ -923,7 +970,16 @@ function showZoom(id){
   const head = it ? `${it.i+1}번 · 내 답 ${it.mine ? CIRC[it.mine-1] : "미표기"} · 정답 ${ansLabel(q)}` : `정답 ${ansLabel(q)}`;
   $("#zoomTitle").textContent = `${head} · ${q.subject}${q.tag ? " · " + q.tag : ""}`;
   $("#zoomPos").textContent = zoomList.length > 1 ? `${zoomPos+1} / ${zoomList.length}` : "";
-  $("#zoomImg").src = Store.img(q); $("#zoomExpl").textContent = q.expl || "";
+  $("#zoom").dataset.id = id; $("#zNote").hidden = false;
+  const zi = $("#zoomImg"), zc = $("#zNoteCv");
+  zc.getContext("2d").clearRect(0, 0, zc.width, zc.height);
+  const zpad = showNotes() && q.note && q.note.length ? (q.notePad || 0) : 0;
+  $("#zPad").style.paddingTop = (zpad * 100) + "%";
+  const zpaint = () => requestAnimationFrame(() => fitAndPaint(zc, showNotes() ? q.note : null, zi.getBoundingClientRect().height));
+  zi.onload = zpaint;
+  zi.src = Store.img(q); $("#zoomExpl").textContent = q.expl || "";
+  if (zi.complete) zpaint();
+  $("#zNote").textContent = q.note && q.note.length ? "필기 고치기" : "필기하기";
   $("#zPrev").hidden = $("#zNext").hidden = zoomList.length < 2;
   $("#zPrev").disabled = zoomPos <= 0;
   $("#zNext").disabled = zoomPos < 0 || zoomPos >= zoomList.length - 1;
@@ -931,6 +987,7 @@ function showZoom(id){
 }
 function zoomStep(d){ const j = zoomPos + d; if (j < 0 || j >= zoomList.length) return; zoomPos = j; showZoom(zoomList[j]); }
 $("#zPrev").onclick = () => zoomStep(-1);
+$("#zNote").onclick = () => { const id = zoomList[zoomPos] || null; const cur = id || $("#zoom").dataset.id; if (cur) openNoteEditor(cur, zoomList.length ? zoomList : [cur]); };
 $("#zNext").onclick = () => zoomStep(1);
 $("#zoom").addEventListener("keydown", e => {
   if (e.key === "ArrowLeft"){ e.preventDefault(); zoomStep(-1); }
@@ -1033,7 +1090,7 @@ function renderAdd(){
     const rm = e.target.closest("[data-rm]");
     if (rm){ const [p] = pending.splice(+rm.dataset.rm, 1); URL.revokeObjectURL(p.url); renderAdd(); return; }
     const pz = e.target.closest("[data-pz]");
-    if (pz){ const p = pending[+pz.dataset.pz]; $("#zoomImg").src = p.url; $("#zoomTitle").textContent = p.name; $("#zoomExpl").textContent = ""; zoomList = []; $("#zoomPos").textContent = ""; $("#zPrev").hidden = $("#zNext").hidden = true; $("#zoom").showModal(); }
+    if (pz){ const p = pending[+pz.dataset.pz]; $("#zoomImg").src = p.url; $("#zoomTitle").textContent = p.name; $("#zoomExpl").textContent = ""; $("#zNote").hidden = true; $("#zPad").style.paddingTop = "0%"; { const zc = $("#zNoteCv"); zc.getContext("2d").clearRect(0, 0, zc.width, zc.height); } zoomList = []; $("#zoomPos").textContent = ""; $("#zPrev").hidden = $("#zNext").hidden = true; $("#zoom").showModal(); }
   };
   $("#clear").onclick = () => { pending.forEach(p => URL.revokeObjectURL(p.url)); pending = []; renderAdd(); };
   $("#save").onclick = savePending;
@@ -1162,7 +1219,7 @@ function renderManage(){
         <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span></div>
         <div class="mrow"><span>정답 <select data-ans="${q.id}">${Array.from({length: q.choices || st.choices}, (_, c) => `<option value="${c+1}" ${q.answer===c+1?"selected":""}>${CIRC[c]}</option>`).join("")}</select></span>
           ${answersOf(q).length > 1 ? `<span class="note">${q.noAnswer ? "정답 없음" : "복수정답 " + ansLabel(q)}</span>` : ""}<span class="rate${r >= 0.5 ? " hi" : ""}">${q.n ? `${q.n}회 중 ${q.w}회 틀림` : "안 푼 문제"}</span></div>
-        <div class="mrow"><span>${q.lastAt ? Math.floor((now - q.lastAt)/dayMs) + "일 전" : ""}${q.last === 2 ? " · 헷갈림" : q.last === 0 ? " · 최근 틀림" : ""}</span><button class="btn ghost danger" data-del="${q.id}" style="padding:2px 6px">삭제</button></div>
+        <div class="mrow"><span>${q.lastAt ? Math.floor((now - q.lastAt)/dayMs) + "일 전" : ""}${q.last === 2 ? " · 헷갈림" : q.last === 0 ? " · 최근 틀림" : ""}</span><span><button class="btn ghost" data-note="${q.id}" style="padding:2px 6px">${q.note && q.note.length ? "필기 ✓" : "필기"}</button><button class="btn ghost danger" data-del="${q.id}" style="padding:2px 6px">삭제</button></span></div>
       </div>`;}).join("")}</div>`
       : `<div class="empty"><b>${S.questions.size ? "조건에 맞는 문제가 없어요" : "아직 등록한 문제가 없어요"}</b>${S.questions.size ? "다른 보기를 골라보세요." : `<a href="#add">문제 등록</a>에서 이미지를 올려보세요.`}</div>`}`;
   $("#fs").onchange = e => { f.subject = e.target.value; renderManage(); };
@@ -1213,6 +1270,7 @@ function renderManage(){
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
     if (e.target.closest("[data-pick], label.check")) return;
+    const nb = e.target.closest("button[data-note]"); if (nb) return openNoteEditor(nb.dataset.note, shown.map(q => q.id));
     const z = e.target.closest("[data-zoom]"); if (z) return zoom(z.dataset.zoom);
     const d = e.target.closest("[data-del]");
     if (d && confirm("이 문제를 지울까요? 되돌릴 수 없어요.")){
@@ -1308,6 +1366,153 @@ function setupInk(){
   };
   setInkTool(inkTool);
 }
+
+/* ---------- saved notes per question (my annotated version) ---------- */
+const showNotes = () => ls.get("gm-shownotes") !== false;
+function paintStrokes(ctx, W, H, strokes){
+  for (const s of strokes || []){
+    const st = INK_STYLE[s.t] || INK_STYLE.red, p = s.p; if (!p || !p.length) continue;
+    ctx.save(); ctx.globalAlpha = st.a; ctx.strokeStyle = st.c; ctx.lineWidth = Math.max(1, st.w * W);
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(p[0] * W, p[1] * H);
+    if (p.length === 2) ctx.lineTo(p[0] * W + 0.5, p[1] * H);
+    for (let k = 2; k < p.length; k += 2) ctx.lineTo(p[k] * W, p[k+1] * H);
+    ctx.stroke(); ctx.restore();
+  }
+}
+function fitAndPaint(cv, strokes, imgH){
+  const r = cv.getBoundingClientRect(); if (!r.width || !r.height) return;
+  const dpr = window.devicePixelRatio || 1, w = Math.round(r.width * dpr), hh = Math.round(r.height * dpr);
+  if (cv.width !== w || cv.height !== hh){ cv.width = w; cv.height = hh; }
+  const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, w, hh);
+  paintStrokes(ctx, w, imgH ? imgH * dpr : hh, strokes);
+}
+async function mergeNote(src, strokes){
+  if (!strokes || !strokes.length) return src;
+  const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+  const scale = Math.min(1, 2400 / img.naturalWidth);
+  const w = Math.round(img.naturalWidth * scale), hh = Math.round(img.naturalHeight * scale);
+  const c = document.createElement("canvas"); c.width = w; c.height = hh;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, hh); ctx.drawImage(img, 0, 0, w, hh);
+  ctx.globalCompositeOperation = "multiply"; paintStrokes(ctx, w, hh, strokes);
+  return c.toDataURL("image/png");
+}
+function setupNoteCanvases(){
+  document.querySelectorAll("canvas.qnote[data-note]").forEach(cv => {
+    const id = cv.dataset.note;
+    const paint = () => { const q = S.questions.get(id); if (q) fitAndPaint(cv, q.note); };
+    new ResizeObserver(paint).observe(cv.parentElement);
+  });
+}
+
+/* note editor */
+const NE = { list: [], pos: 0, id: null, strokes: [], pad: 0, tool: "red", dirty: false, saveT: null, anyChange: false };
+const PAD_STEP = 0.3;
+const neImgH = () => $("#neImg").getBoundingClientRect().height;
+function neSetPad(v){ NE.pad = Math.max(0, Math.round(v * 10) / 10); $("#nePad").style.paddingTop = (NE.pad * 100) + "%"; $("#nePadMinus").disabled = NE.pad <= 0; requestAnimationFrame(neFit); }
+function openNoteEditor(id, list){
+  NE.list = list && list.length ? list : [id];
+  NE.pos = Math.max(0, NE.list.indexOf(id));
+  NE.anyChange = false;
+  const d = $("#noteEd");
+  if (!d.open) d.showModal();
+  neSetTool(NE.tool || "red");
+  neLoad(NE.list[NE.pos]);
+}
+function neLoad(id){
+  const q = S.questions.get(id); if (!q) return;
+  NE.id = id; NE.strokes = (q.note || []).map(s => ({ t: s.t, p: s.p.slice() })); NE.dirty = false;
+  neSetPad(q.notePad || 0);
+  $("#neTitle").textContent = `${q.subject}${q.tag ? " · " + q.tag : ""} · 정답 ${ansLabel(q)}`;
+  $("#nePos").textContent = NE.list.length > 1 ? `${NE.pos + 1} / ${NE.list.length}` : "";
+  $("#nePrev").disabled = NE.pos <= 0; $("#neNext").disabled = NE.pos >= NE.list.length - 1;
+  $("#nePrev").hidden = $("#neNext").hidden = NE.list.length < 2;
+  $("#neExpl").textContent = q.expl || "";
+  $("#neSaved").textContent = "";
+  const img = $("#neImg");
+  img.onload = () => neFit();
+  img.src = Store.img(q);
+  $(".ne-body").scrollTop = 0;
+  neFit();
+}
+function neFit(){ fitAndPaint($("#neCv"), NE.strokes, neImgH()); }
+function neSetTool(t){ NE.tool = t; document.querySelectorAll("#noteEd [data-ntool]").forEach(b => b.setAttribute("aria-pressed", b.dataset.ntool === t)); $("#neCv").style.cursor = t === "eraser" ? "cell" : "crosshair"; }
+async function neSave(final){
+  clearTimeout(NE.saveT);
+  if (!NE.dirty || !NE.id) return;
+  NE.dirty = false; NE.anyChange = true;
+  try { await Store.update(NE.id, { note: NE.strokes.map(s => ({ t: s.t, p: s.p })), notePad: NE.pad }); $("#neSaved").textContent = "저장됨"; }
+  catch { $("#neSaved").textContent = "저장 실패"; NE.dirty = true; }
+  if (final && NE.anyChange) abWrite("records");
+}
+function neQueueSave(){ NE.dirty = true; $("#neSaved").textContent = "…"; clearTimeout(NE.saveT); NE.saveT = setTimeout(() => neSave(false), 700); }
+async function neStep(d){ const j = NE.pos + d; if (j < 0 || j >= NE.list.length) return; await neSave(false); NE.pos = j; neLoad(NE.list[j]); }
+async function neClose(){
+  await neSave(true);
+  $("#noteEd").close();
+  if (currentView() === "manage") renderManage();
+  else if ($("#zoom").open && zoomList[zoomPos]) showZoom(zoomList[zoomPos]);
+}
+(function setupNoteEditor(){
+  const d = $("#noteEd"), cv = $("#neCv"), body = $(".ne-body");
+  new ResizeObserver(() => { if (d.open) neFit(); }).observe($(".ne-wrap"));
+  let cur = null;
+  cv.addEventListener("pointerdown", e => {
+    if (e.button > 0) return;
+    if (e.pointerType === "pen" && !penOnly){ penOnly = true; ls.set("gm-penonly", true); }
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    if (penOnly && e.pointerType === "touch"){ cur = { pan: true, y: e.clientY }; return; }
+    const cr = cv.getBoundingClientRect(), r = { left: cr.left, top: cr.top, width: cr.width, height: neImgH() };
+    const pt = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    if (NE.tool === "eraser"){ cur = { erase: true }; neErase(pt, r); return; }
+    cur = { t: NE.tool, p: [+pt.x.toFixed(4), +pt.y.toFixed(4)] }; NE.strokes.push(cur); neFit();
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!cur) return;
+    if (cur.pan){ body.scrollTop += cur.y - e.clientY; cur.y = e.clientY; return; }
+    const cr = cv.getBoundingClientRect(), r = { left: cr.left, top: cr.top, width: cr.width, height: neImgH() };
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of evs.length ? evs : [e]){
+      const pt = { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
+      if (cur.erase) neErase(pt, r); else cur.p.push(+pt.x.toFixed(4), +pt.y.toFixed(4));
+    }
+    if (!cur.erase) neFit();
+  });
+  const end = () => { if (!cur) return; const was = cur; cur = null; if (!was.pan) neQueueSave(); };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  function neErase(pt, r){
+    const rad = 14, before = NE.strokes.length;
+    NE.strokes = NE.strokes.filter(s => { for (let k = 0; k < s.p.length; k += 2){ const dx = (s.p[k] - pt.x) * r.width, dy = (s.p[k+1] - pt.y) * r.height; if (dx*dx + dy*dy < rad*rad) return false; } return true; });
+    if (NE.strokes.length !== before) neFit();
+  }
+  d.addEventListener("click", e => {
+    const t = e.target.closest("[data-ntool]"); if (t){ neSetTool(t.dataset.ntool); return; }
+    const a = e.target.closest("[data-nact]"); if (!a) return;
+    const act = a.dataset.nact;
+    if (act === "undo"){ if (NE.strokes.length){ NE.strokes.pop(); neFit(); neQueueSave(); } }
+    else if (act === "clear"){ if (NE.strokes.length && confirm("이 문제의 필기를 모두 지울까요?")){ NE.strokes = []; neFit(); neQueueSave(); } }
+    else if (act === "padplus"){ neSetPad(NE.pad + PAD_STEP); neQueueSave(); setTimeout(() => { const b = $(".ne-body"); b.scrollTop = b.scrollHeight; }, 60); }
+    else if (act === "padminus"){
+      const newPad = Math.max(0, NE.pad - PAD_STEP), ih = neImgH(), iw = $("#neImg").getBoundingClientRect().width;
+      const limit = 1 + (newPad * iw) / (ih || 1);
+      const lost = NE.strokes.some(st => { for (let k = 1; k < st.p.length; k += 2) if (st.p[k] > limit) return true; return false; });
+      if (lost && !confirm("줄이는 여백에 필기가 있어요. 그 필기는 안 보이게 돼요. 줄일까요?")) return;
+      neSetPad(newPad); neQueueSave();
+    }
+    else if (act === "prev") neStep(-1);
+    else if (act === "next") neStep(1);
+    else if (act === "close") neClose();
+  });
+  d.addEventListener("cancel", e => { e.preventDefault(); neClose(); });
+  d.addEventListener("keydown", e => {
+    if (e.target.matches("input,textarea")) return;
+    const k = e.key.toLowerCase();
+    if (e.key === "ArrowLeft"){ e.preventDefault(); neStep(-1); }
+    else if (e.key === "ArrowRight"){ e.preventDefault(); neStep(1); }
+    else if (k === "z" || ((e.ctrlKey || e.metaKey) && k === "z")){ e.preventDefault(); if (NE.strokes.length){ NE.strokes.pop(); neFit(); neQueueSave(); } }
+    else if ({ p: "red", b: "black", h: "hl", e: "eraser" }[k]){ e.preventDefault(); neSetTool({ p: "red", b: "black", h: "hl", e: "eraser" }[k]); }
+  });
+})();
 
 /* ---------- excel import ---------- */
 const xImp = { rows: null, fileName: "", subject: null, images: new Map() };
