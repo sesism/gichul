@@ -1894,7 +1894,7 @@ function renderCycleDone(all){
   $("#app").onclick = e => {
     const b = e.target.closest("[data-next]"); if (!b || b.disabled) return;
     if (all.length) R.hist.push({ cycle: cyc, total: answered.length, correct, at: Date.now() });
-    R.cycle = cyc + 1; R.mode = b.dataset.next; R.done = [];
+    R.cycle = cyc + 1; R.mode = b.dataset.next; R.done = []; delete R.undo;
     Store.saveSettings().catch(() => {}); abWrite("records");
     rvS.cycle = R.cycle; rvS.curId = null; rvS.answered = null; rvSave();
     toast(`${R.cycle}회독을 시작해요.`); renderReview();
@@ -1905,14 +1905,14 @@ function rvPanelHtml(){
   if (!subs.length) return "";
   return `<h2>순서대로 회독</h2>
     <div class="panel stack" id="rvPanel">
-      <div class="note">엑셀 순서대로 한 문제씩 풀고 바로 채점해요. 그만두면 위치를 기억해서 다음에 이어서 풀 수 있어요.</div>
+      <div class="note">엑셀 순서대로 한 문제씩 풀고 바로 채점해요. 그만두면 위치를 기억해서 다음에 이어서 풀 수 있어요. 회독 위치 초기화는 설정 탭에 있어요.</div>
       ${subs.map(s => {
         const R = rvState(s), { all, remaining } = rvQueue(s), done = all.length - remaining.length;
         const pct = all.length ? Math.round(done / all.length * 100) : 0;
         const last = R.hist.length ? R.hist[R.hist.length - 1] : null;
         return `<div class="setrow"><div><b>${h(s)}</b> <span class="note">${R.cycle}회독${R.mode !== "all" ? " · " + RV_MODES[R.mode] : ""} · ${done} / ${all.length}${last && last.total ? ` · 지난 회독 ${Math.round(last.correct / last.total * 100)}%` : ""}</span>
           <div class="rvprog" style="margin-top:6px;max-width:360px"><i style="width:${pct}%"></i></div></div>
-          <div style="display:flex;gap:6px"><button class="btn primary" data-rv="go" data-s="${h(s)}">${done ? "이어서 풀기" : "시작"}</button>${done ? `<button class="btn ghost" data-rv="reset" data-s="${h(s)}">이번 회독 처음부터</button>` : ""}</div></div>`;
+          <div style="display:flex;gap:6px"><button class="btn primary" data-rv="go" data-s="${h(s)}">${done ? "이어서 풀기" : "시작"}</button></div></div>`;
       }).join("")}
     </div>`;
 }
@@ -2325,6 +2325,11 @@ function renderSettings(){
       ${(S.settings.manualSubjects || []).map(sub => `<div class="setrow"><div><b>${h(sub)}</b> <span class="note">${S.history.filter(e => e.subject === sub).length}회 기록</span></div><div><button class="btn ghost danger" data-msubj="del" data-name="${h(sub)}">목록에서 빼기</button></div></div>`).join("")}
       <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="newMSubj" placeholder="직접 기록할 과목 (예: 한국사)" style="flex:1;min-width:200px"><button class="btn" data-msubj="add">추가</button></div>
     </div>
+    ${(() => { const subs = S.settings.subjects.filter(x => S.settings.review && S.settings.review[x]); if (!subs.length) return ""; return `<h2>회독</h2>
+    <div class="panel stack">
+      <div class="note">이번 회독의 진행 위치를 처음으로 되돌려요. 문제별 풀이 기록과 지난 회독 결과는 지워지지 않아요.</div>
+      ${subs.map(x => { const R = S.settings.review[x]; return `<div class="setrow"><div><b>${h(x)}</b> <span class="note">${R.cycle}회독 · ${R.done.length}문제 풀었음</span></div><div style="display:flex;gap:6px">${R.undo ? `<button class="btn" data-rvundo="${h(x)}">초기화 되돌리기</button>` : ""}<button class="btn ghost danger" data-rvreset="${h(x)}" ${R.done.length ? "" : "disabled"}>이번 회독 처음부터</button></div></div>`; }).join("")}
+    </div>`; })()}
     <h2>글자</h2>
     <div class="panel stack">
       ${row("해설 글자 크기", "채점 결과, 크게 보기, 필기 화면의 해설에 적용돼요.", `<div style="display:flex;align-items:center;gap:12px"><input type="range" id="explSize" min="13" max="26" step="1" value="${ex}" style="width:200px;accent-color:var(--omr)"><b id="explVal" style="min-width:4ch">${ex}px</b></div>`)}
@@ -2351,6 +2356,23 @@ function renderSettings(){
     <p class="note" style="margin-top:24px">백업과 구글 드라이브 연결은 <a href="#manage">문제 관리</a> 탭 맨 위에 있어요.</p>`;
   $("#explSize").oninput = e => { const v = +e.target.value; ls.set("gm-explsize", v); $("#explVal").textContent = v + "px"; applyPrefs(); };
   $("#app").onclick = async e => {
+    const rr = e.target.closest("[data-rvreset]");
+    if (rr){
+      const x = rr.dataset.rvreset, R = S.settings.review[x];
+      const typed = prompt(`${x} ${R.cycle}회독에서 푼 ${R.done.length}문제의 진행 위치가 처음으로 돌아가요.\n정말 하려면 ‘처음부터’라고 입력하세요.`);
+      if ((typed || "").trim() !== "처음부터"){ if (typed !== null) toast("입력이 달라서 취소했어요."); return; }
+      R.undo = { done: R.done.slice(), at: Date.now() }; R.done = [];
+      if (rvS && rvS.subject === x){ rvS.curId = null; rvS.answered = null; rvSave(); }
+      try { await Store.saveSettings(); } catch {} abWrite("records");
+      toast("처음부터 다시 시작해요. 실수였다면 ‘초기화 되돌리기’를 누르세요."); renderSettings(); return;
+    }
+    const ru = e.target.closest("[data-rvundo]");
+    if (ru){
+      const x = ru.dataset.rvundo, R = S.settings.review[x]; if (!R.undo) return;
+      R.done = [...new Set([...R.undo.done, ...R.done])]; delete R.undo;
+      try { await Store.saveSettings(); } catch {} abWrite("records");
+      toast("회독 위치를 되돌렸어요."); renderSettings(); return;
+    }
     const sb = e.target.closest("[data-subj]");
     if (sb){
       const act = sb.dataset.subj, name = sb.dataset.name, list = S.settings.subjects;
