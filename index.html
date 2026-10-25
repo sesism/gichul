@@ -475,7 +475,7 @@ let lastResult = null;
 let shownResult = null;           // result currently on screen (latest or from history)
 let pending = [];               // files waiting to be registered
 let addSubject = null, addTag = "";
-let manageFilter = { subject:"all", kind:"all", sort:"new" };
+let manageFilter = { subject:"all", kind:"all", sort:"new", batch:"" };
 let tick = null;
 
 /* ---------- routing ---------- */
@@ -1079,24 +1079,64 @@ async function savePending(){
 }
 
 /* ---------- manage view ---------- */
+function importBatches(){
+  const qs = [...S.questions.values()].filter(q => q.createdAt).sort((a, b) => a.createdAt - b.createdAt);
+  const out = []; let cur = null, prev = 0;
+  for (const q of qs){
+    if (!cur || q.createdAt - prev > 5 * 60000){ cur = { key: String(q.createdAt), at: q.createdAt, ids: new Set() }; out.push(cur); }
+    cur.ids.add(q.id); prev = q.createdAt;
+  }
+  return out.reverse();
+}
+const selected = new Set();
+async function moveQuestions(ids, subject){
+  let done = 0; const remap = new Map();
+  for (const id of ids){
+    const q = S.questions.get(id); if (!q || q.subject === subject) continue;
+    try{
+      if (S.mode === "local" && q.blob && q.src && id.startsWith("x")){
+        const nid = importId(subject, q.src);
+        if (nid !== id && !S.questions.has(nid)){
+          const { id: _i, blob, ...meta } = q;
+          await Store.put(nid, blob, { ...meta, subject });
+          await Store.remove(id);
+          remap.set(id, nid); done++; continue;
+        }
+      }
+      await Store.update(id, { subject }); done++;
+    } catch {}
+  }
+  if (remap.size){
+    S.history.forEach(e => { if (e.ids) e.ids = e.ids.map(x => remap.get(x) || x); });
+    try { await Store.saveHistory(); } catch {}
+  }
+  if (!S.settings.subjects.includes(subject)){ S.settings.subjects.push(subject); try { await Store.saveSettings(); } catch {} }
+  return done;
+}
 function renderManage(){
   const st = S.settings, f = manageFilter, now = Date.now();
+  const batches = importBatches();
+  if (f.batch && !batches.some(b => b.key === f.batch)) f.batch = "";
   let list = [...S.questions.values()];
   if (f.subject !== "all") list = list.filter(q => q.subject === f.subject);
+  if (f.batch){ const b = batches.find(x => x.key === f.batch); list = list.filter(q => b.ids.has(q.id)); }
   if (f.kind === "wrong") list = list.filter(q => q.w > 0);
   if (f.kind === "recent") list = list.filter(q => q.last === 0);
   if (f.kind === "lucky") list = list.filter(q => q.last === 2);
   if (f.kind === "unseen") list = list.filter(q => !q.n);
   const rate = q => q.n ? q.w / q.n : -1;
   list.sort(f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : (a, b) => (b.createdAt||0) - (a.createdAt||0));
+  [...selected].forEach(id => { if (!S.questions.has(id)) selected.delete(id); });
   const shown = list.slice(0, 120);
+  const bLabel = b => { const d = new Date(b.at); return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")} 등록 · ${b.ids.size}문제`; };
   $("#app").innerHTML = `
     <h1>문제 관리</h1>
-    <p class="lede">정답을 고치거나 문제를 지울 수 있어요. 많이 틀리는 문제는 안키 OX 카드로 옮기기 좋아요.</p>
+    <p class="lede">정답을 고치거나 문제를 지울 수 있어요. 여러 문제를 골라서 과목을 옮기거나 한꺼번에 지울 수도 있어요.</p>
     <div class="panel stack" id="bkPanel" style="margin-bottom:24px;gap:14px">${backupPanelHtml()}</div>
     <input type="file" id="bkFile" accept=".json,application/json" class="hidden">
     <div class="toolbar">
       <div class="field"><label for="fs">과목</label><select id="fs"><option value="all">전체</option>${st.subjects.map(s => `<option ${f.subject===s?"selected":""}>${h(s)}</option>`).join("")}</select></div>
+      <div class="field"><label for="fb">등록 묶음</label><select id="fb"><option value="">전체</option>${batches.map(b => `<option value="${b.key}" ${f.batch===b.key?"selected":""}>${bLabel(b)}</option>`).join("")}</select></div>
       <div class="field"><label for="fk">보기</label><select id="fk">
         <option value="all">전체</option><option value="recent" ${f.kind==="recent"?"selected":""}>최근에 틀린 문제</option>
         <option value="wrong" ${f.kind==="wrong"?"selected":""}>한 번이라도 틀린 문제</option><option value="lucky" ${f.kind==="lucky"?"selected":""}>헷갈렸지만 맞은 문제</option>
@@ -1105,9 +1145,19 @@ function renderManage(){
         <option value="new">최근 등록순</option><option value="rate" ${f.sort==="rate"?"selected":""}>오답률 높은 순</option><option value="old" ${f.sort==="old"?"selected":""}>오래 안 본 순</option></select></div>
       <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${shown.length}개 표시` : ""}</span>
     </div>
+    ${list.length ? `<div class="panel" id="selBar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:12px 16px">
+      <b id="selCount">${selected.size}문제 선택</b>
+      <button class="btn ghost" data-sel="all">조건에 맞는 ${list.length}문제 모두 선택</button>
+      <button class="btn ghost" data-sel="none">선택 해제</button>
+      <span style="flex:1"></span>
+      <select id="moveTo" style="width:auto">${st.subjects.map(s => `<option>${h(s)}</option>`).join("")}<option value="__new">+ 새 과목</option></select>
+      <button class="btn" data-sel="move">선택한 문제 과목 옮기기</button>
+      <button class="btn danger" data-sel="del">선택한 문제 삭제</button>
+    </div>` : ""}
     ${shown.length ? `<div class="qgrid" id="qgrid">${shown.map(q => {
       const r = rate(q);
       return `<div class="mcard" data-id="${q.id}">
+        <label class="check" style="font-size:13px;margin:-2px 0 0"><input type="checkbox" data-pick="${q.id}" ${selected.has(q.id) ? "checked" : ""}><span>선택</span></label>
         <div class="pthumb" data-zoom="${q.id}"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>
         <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span></div>
         <div class="mrow"><span>정답 <select data-ans="${q.id}">${Array.from({length: q.choices || st.choices}, (_, c) => `<option value="${c+1}" ${q.answer===c+1?"selected":""}>${CIRC[c]}</option>`).join("")}</select></span>
@@ -1116,6 +1166,7 @@ function renderManage(){
       </div>`;}).join("")}</div>`
       : `<div class="empty"><b>${S.questions.size ? "조건에 맞는 문제가 없어요" : "아직 등록한 문제가 없어요"}</b>${S.questions.size ? "다른 보기를 골라보세요." : `<a href="#add">문제 등록</a>에서 이미지를 올려보세요.`}</div>`}`;
   $("#fs").onchange = e => { f.subject = e.target.value; renderManage(); };
+  $("#fb").onchange = e => { f.batch = e.target.value; renderManage(); };
   $("#fk").onchange = e => { f.kind = e.target.value; renderManage(); };
   $("#fo").onchange = e => { f.sort = e.target.value; renderManage(); };
   $("#bkPanel").onclick = e => {
@@ -1129,8 +1180,39 @@ function renderManage(){
     else if (act === "now") abWrite("full");
   };
   $("#bkFile").onchange = e => { const file = e.target.files[0]; e.target.value = ""; if (file) importBackup(file); };
+  const updCount = () => { const c = $("#selCount"); if (c) c.textContent = `${selected.size}문제 선택`; };
+  const sb = $("#selBar");
+  if (sb){
+    $("#moveTo").onchange = async e => {
+      if (e.target.value !== "__new") return;
+      const name = (prompt("새 과목 이름") || "").trim();
+      if (name && !st.subjects.includes(name)){ st.subjects.push(name); try { await Store.saveSettings(); } catch {} }
+      renderManage(); if (name) $("#moveTo").value = name;
+    };
+    sb.onclick = async e => {
+      const b = e.target.closest("[data-sel]"); if (!b) return;
+      const act = b.dataset.sel;
+      if (act === "all"){ list.forEach(q => selected.add(q.id)); document.querySelectorAll("[data-pick]").forEach(c => c.checked = true); updCount(); return; }
+      if (act === "none"){ selected.clear(); document.querySelectorAll("[data-pick]").forEach(c => c.checked = false); updCount(); return; }
+      if (!selected.size){ toast("먼저 문제를 선택하세요."); return; }
+      if (act === "move"){
+        const to = $("#moveTo").value; if (!to || to === "__new") return;
+        if (!confirm(`선택한 ${selected.size}문제를 ‘${to}’ 과목으로 옮길까요? 풀이 기록은 그대로 따라가요.`)) return;
+        b.disabled = true; b.textContent = "옮기는 중…";
+        const n = await moveQuestions([...selected], to);
+        selected.clear(); toast(`${n}문제를 ${to}(으)로 옮겼어요.`); abWrite("full");
+        f.subject = to; f.batch = ""; renderManage();
+      } else if (act === "del"){
+        if (!confirm(`선택한 ${selected.size}문제를 지울까요? 되돌릴 수 없어요.`)) return;
+        b.disabled = true; let n = 0;
+        for (const id of [...selected]){ try { await Store.remove(id); n++; } catch {} }
+        selected.clear(); toast(`${n}문제를 지웠어요.`); abWrite("records"); renderManage();
+      }
+    };
+  }
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
+    if (e.target.closest("[data-pick], label.check")) return;
     const z = e.target.closest("[data-zoom]"); if (z) return zoom(z.dataset.zoom);
     const d = e.target.closest("[data-del]");
     if (d && confirm("이 문제를 지울까요? 되돌릴 수 없어요.")){
@@ -1138,6 +1220,8 @@ function renderManage(){
     }
   };
   g.onchange = async e => {
+    const pk = e.target.closest("[data-pick]");
+    if (pk){ if (pk.checked) selected.add(pk.dataset.pick); else selected.delete(pk.dataset.pick); updCount(); return; }
     const s = e.target.closest("[data-ans]"); if (!s) return;
     try { await Store.update(s.dataset.ans, { answer: +s.value, answers: [+s.value], noAnswer: false }); toast("정답을 고쳤어요."); abWrite("records"); } catch { toast("저장하지 못했어요."); }
   };
