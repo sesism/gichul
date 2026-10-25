@@ -343,9 +343,11 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
   <div class="ne-bar">
     <div class="ne-tools">
       <button data-ntool="red" title="빨간 펜 (P)" aria-label="빨간 펜"><span class="sw" style="background:#E0283C"></span></button>
+      <button data-ntool="blue" title="파란 펜 (U)" aria-label="파란 펜"><span class="sw" style="background:#1F5FD6"></span></button>
       <button data-ntool="black" title="검은 펜 (B)" aria-label="검은 펜"><span class="sw" style="background:#111;box-shadow:0 0 0 1px var(--line)"></span></button>
       <button data-ntool="hl" title="형광펜 (H)" aria-label="형광펜"><span class="sw" style="background:#FFD400;border-radius:3px;width:20px;height:10px"></span></button>
       <button data-ntool="eraser" title="지우개 (E)" aria-label="지우개"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M16 3l5 5-11 11H5l-2-2z"/><path d="M9 10l5 5"/><path d="M10 19h11"/></svg></button>
+      <button data-nact="size" title="굵기 (S)" aria-label="굵기 바꾸기"></button>
       <button data-nact="undo" title="되돌리기 (Z)" aria-label="되돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
       <button data-nact="clear" title="필기 모두 지우기" aria-label="필기 모두 지우기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
     </div>
@@ -658,10 +660,12 @@ function renderExam(){
       <button data-tool="" title="필기 끄기 (V)" aria-label="필기 끄기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3l14 8-6 1.5L10 19z"/></svg></button>
       <span class="sep"></span>
       <button data-tool="red" title="빨간 펜 (P)" aria-label="빨간 펜"><span class="sw" style="background:#E0283C"></span></button>
+      <button data-tool="blue" title="파란 펜 (U)" aria-label="파란 펜"><span class="sw" style="background:#1F5FD6"></span></button>
       <button data-tool="black" title="검은 펜 (B)" aria-label="검은 펜"><span class="sw" style="background:#111;box-shadow:0 0 0 1px var(--line)"></span></button>
       <button data-tool="hl" title="형광펜 (H)" aria-label="형광펜"><span class="sw" style="background:#FFD400;border-radius:3px;width:20px;height:10px"></span></button>
       <button data-tool="eraser" title="지우개 (E)" aria-label="지우개"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M16 3l5 5-11 11H5l-2-2z"/><path d="M9 10l5 5"/><path d="M10 19h11"/></svg></button>
       <span class="sep"></span>
+      <button data-act="size" title="굵기 (S)" aria-label="굵기 바꾸기"></button>
       <button data-act="undo" title="되돌리기 (Z)" aria-label="되돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
       <button data-act="clear" title="이 문제 필기 모두 지우기" aria-label="이 문제 필기 지우기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
     </div>`}
@@ -877,7 +881,8 @@ document.addEventListener("keydown", e => {
     return;
   }
   const key = e.key.toLowerCase();
-  const toolKeys = { v: null, p: "red", b: "black", h: "hl", e: "eraser" };
+  const toolKeys = { v: null, p: "red", b: "black", u: "blue", h: "hl", e: "eraser" };
+  if (key === "s"){ e.preventDefault(); cycleSize(inkTool === "hl" ? "hl" : "pen"); return; }
   if (key in toolKeys){ e.preventDefault(); setInkTool(inkTool === toolKeys[key] ? null : toolKeys[key]); return; }
   if (key === "z"){ e.preventDefault(); inkUndo(); return; }
   if (e.key === "Escape" && inkTool){ setInkTool(null); return; }
@@ -1313,8 +1318,9 @@ function renderManage(){
 
 /* ---------- drawing on questions ---------- */
 let inkTool = null, lastInkIdx = null, penOnly = !!ls.get("gm-penonly");
-const INK_STYLE = { red: { c: "#E0283C", w: 0.0032, a: 1 }, black: { c: "#111111", w: 0.0028, a: 1 }, hl: { c: "#FFD400", w: 0.022, a: 0.45 } };
+const INK_STYLE = { red: { c: "#E0283C", w: 0.0032, a: 1 }, black: { c: "#111111", w: 0.0028, a: 1 }, blue: { c: "#1F5FD6", w: 0.003, a: 1 }, hl: { c: "#FFD400", w: 0.022, a: 0.45 } };
 function setInkTool(t){
+  setTimeout(updateSizeIcons, 0);
   inkTool = t || null;
   document.body.classList.toggle("drawing", !!inkTool);
   document.body.classList.toggle("erasing", inkTool === "eraser");
@@ -1325,15 +1331,7 @@ function drawInk(i){
   const cv = document.querySelector(`.ink[data-ink="${i}"]`); if (!cv || !cv.width) return;
   const ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
-  for (const s of (exam && exam.ink && exam.ink[i]) || []){
-    const st = INK_STYLE[s.t] || INK_STYLE.red, p = s.p;
-    ctx.save(); ctx.globalAlpha = st.a; ctx.strokeStyle = st.c; ctx.lineWidth = Math.max(1, st.w * W);
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath(); ctx.moveTo(p[0] * W, p[1] * H);
-    if (p.length === 2) ctx.lineTo(p[0] * W + 0.5, p[1] * H);
-    for (let k = 2; k < p.length; k += 2) ctx.lineTo(p[k] * W, p[k+1] * H);
-    ctx.stroke(); ctx.restore();
-  }
+  paintStrokes(ctx, W, H, (exam && exam.ink && exam.ink[i]) || []);
 }
 function eraseAt(i, pt, cv){
   const arr = exam.ink[i]; if (!arr || !arr.length) return;
@@ -1366,7 +1364,7 @@ function setupInk(){
       setCurrent(i);
       const pt = inkNorm(cv, e);
       if (inkTool === "eraser"){ cur = { erase: true }; eraseAt(i, pt, cv); return; }
-      cur = { t: inkTool, p: [+pt.x.toFixed(4), +pt.y.toFixed(4)] };
+      cur = newStroke(inkTool, pt, e);
       (exam.ink[i] = exam.ink[i] || []).push(cur); lastInkIdx = i;
       drawInk(i);
     });
@@ -1376,11 +1374,14 @@ function setupInk(){
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of evs.length ? evs : [e]){
         const pt = inkNorm(cv, ev);
-        if (cur.erase) eraseAt(i, pt, cv); else cur.p.push(+pt.x.toFixed(4), +pt.y.toFixed(4));
+        if (cur.erase) eraseAt(i, pt, cv); else pushPoint(cur, pt, ev);
       }
-      if (!cur.erase) drawInk(i);
+      if (!cur.erase){
+        if (cur.t === "hl") drawInk(i);
+        else { const n0 = cur.drawn || 1; paintTail(cv.getContext("2d"), cv.width, cv.height, cur, n0); cur.drawn = cur.p.length / 2; }
+      }
     });
-    const end = () => { if (!cur) return; cur = null; ls.set("gm-exam", exam); };
+    const end = () => { if (!cur) return; const was = cur; cur = null; if (was.drawn) delete was.drawn; if (!was.erase && !was.pan) drawInk(i); ls.set("gm-exam", exam); };
     cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
   });
   const bar = $(".inkbar");
@@ -1388,6 +1389,7 @@ function setupInk(){
     const b = e.target.closest("button"); if (!b) return;
     if ("tool" in b.dataset) setInkTool(b.dataset.tool || null);
     else if (b.dataset.act === "undo") inkUndo();
+    else if (b.dataset.act === "size") cycleSize(inkTool === "hl" ? "hl" : "pen");
     else if (b.dataset.act === "clear"){ if (exam.ink[curIdx] && exam.ink[curIdx].length){ exam.ink[curIdx] = []; drawInk(curIdx); ls.set("gm-exam", exam); toast(`${curIdx+1}번 필기를 지웠어요.`); } }
   };
   setInkTool(inkTool);
@@ -1395,16 +1397,70 @@ function setupInk(){
 
 /* ---------- saved notes per question (my annotated version) ---------- */
 const showNotes = () => ls.get("gm-shownotes") !== false;
-function paintStrokes(ctx, W, H, strokes){
-  for (const s of strokes || []){
-    const st = INK_STYLE[s.t] || INK_STYLE.red, p = s.p; if (!p || !p.length) continue;
-    ctx.save(); ctx.globalAlpha = st.a; ctx.strokeStyle = st.c; ctx.lineWidth = Math.max(1, st.w * W);
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
+const SIZES = { pen: [0.55, 1, 1.6, 2.4], hl: [0.6, 1, 1.6] };
+let penSize = ls.get("gm-pensize") ?? 1, hlSize = ls.get("gm-hlsize") ?? 1;
+const sizeMult = t => t === "hl" ? SIZES.hl[hlSize] : SIZES.pen[penSize];
+const prOf = ev => ev.pointerType === "pen" ? Math.round(Math.min(1, Math.max(0.05, ev.pressure || 0.5)) * 100) : null;
+function strokeW(st, s, W, pr){ return Math.max(0.8, st.w * W * (s.z || 1) * (pr == null ? 1 : (0.3 + 1.4 * pr))); }
+function paintOne(ctx, W, H, s){
+  const st = INK_STYLE[s.t] || INK_STYLE.red, p = s.p; if (!p || !p.length) return;
+  const n = p.length / 2;
+  ctx.save(); ctx.globalAlpha = st.a; ctx.strokeStyle = st.c; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (s.pr && s.pr.length && s.t !== "hl"){
+    if (n === 1){ ctx.lineWidth = strokeW(st, s, W, s.pr[0] / 100); ctx.beginPath(); ctx.moveTo(p[0] * W, p[1] * H); ctx.lineTo(p[0] * W + 0.5, p[1] * H); ctx.stroke(); }
+    for (let k = 1; k < n; k++){
+      ctx.lineWidth = strokeW(st, s, W, ((s.pr[k-1] ?? 50) + (s.pr[k] ?? 50)) / 200);
+      ctx.beginPath(); ctx.moveTo(p[2*k-2] * W, p[2*k-1] * H); ctx.lineTo(p[2*k] * W, p[2*k+1] * H); ctx.stroke();
+    }
+  } else {
+    ctx.lineWidth = strokeW(st, s, W, null);
     ctx.beginPath(); ctx.moveTo(p[0] * W, p[1] * H);
-    if (p.length === 2) ctx.lineTo(p[0] * W + 0.5, p[1] * H);
-    for (let k = 2; k < p.length; k += 2) ctx.lineTo(p[k] * W, p[k+1] * H);
-    ctx.stroke(); ctx.restore();
+    if (n === 1) ctx.lineTo(p[0] * W + 0.5, p[1] * H);
+    else if (n === 2) ctx.lineTo(p[2] * W, p[3] * H);
+    else {
+      for (let k = 1; k < n - 1; k++){ const mx = (p[2*k] + p[2*k+2]) / 2 * W, my = (p[2*k+1] + p[2*k+3]) / 2 * H; ctx.quadraticCurveTo(p[2*k] * W, p[2*k+1] * H, mx, my); }
+      ctx.lineTo(p[2*n-2] * W, p[2*n-1] * H);
+    }
+    ctx.stroke();
   }
+  ctx.restore();
+}
+// draw only the newest segments of a stroke while it is being drawn (fast path)
+function paintTail(ctx, W, H, s, fromN){
+  const st = INK_STYLE[s.t] || INK_STYLE.red, p = s.p, n = p.length / 2;
+  ctx.save(); ctx.globalAlpha = st.a; ctx.strokeStyle = st.c; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (let k = Math.max(1, fromN); k < n; k++){
+    ctx.lineWidth = strokeW(st, s, W, s.pr && s.pr.length ? ((s.pr[k-1] ?? 50) + (s.pr[k] ?? 50)) / 200 : null);
+    ctx.beginPath(); ctx.moveTo(p[2*k-2] * W, p[2*k-1] * H); ctx.lineTo(p[2*k] * W, p[2*k+1] * H); ctx.stroke();
+  }
+  ctx.restore();
+}
+function paintStrokes(ctx, W, H, strokes){ for (const s of strokes || []) paintOne(ctx, W, H, s); }
+function newStroke(tool, pt, ev){
+  const s = { t: tool, p: [+pt.x.toFixed(4), +pt.y.toFixed(4)], z: sizeMult(tool) };
+  const pr = prOf(ev); if (pr != null && tool !== "hl") s.pr = [pr];
+  return s;
+}
+function pushPoint(s, pt, ev){
+  const n = s.p.length;
+  const x = +pt.x.toFixed(4), y = +pt.y.toFixed(4);
+  if (n >= 2 && Math.abs(s.p[n-2] - x) < 0.0006 && Math.abs(s.p[n-1] - y) < 0.0006) return false;
+  s.p.push(x, y);
+  if (s.pr){ const pr = prOf(ev); s.pr.push(pr == null ? 50 : pr); }
+  return true;
+}
+function sizeIconHtml(tool){
+  if (tool === "hl"){ const h2 = [6, 10, 15][hlSize]; return `<span style="display:block;width:20px;height:${h2}px;background:#FFD400;border-radius:3px"></span>`; }
+  const d = [4, 7, 11, 16][penSize]; return `<span style="display:block;width:${d}px;height:${d}px;border-radius:50%;background:currentColor"></span>`;
+}
+function cycleSize(tool){
+  if (tool === "hl"){ hlSize = (hlSize + 1) % SIZES.hl.length; ls.set("gm-hlsize", hlSize); toast(`형광펜 굵기: ${["가늘게", "보통", "굵게"][hlSize]}`); }
+  else { penSize = (penSize + 1) % SIZES.pen.length; ls.set("gm-pensize", penSize); toast(`펜 굵기: ${["가늘게", "보통", "굵게", "아주 굵게"][penSize]}`); }
+  updateSizeIcons();
+}
+function updateSizeIcons(){
+  const ex = $(".inkbar [data-act=\"size\"]"); if (ex) ex.innerHTML = sizeIconHtml(inkTool === "hl" ? "hl" : "pen");
+  const ne = $("#noteEd [data-nact=\"size\"]"); if (ne) ne.innerHTML = sizeIconHtml(NE.tool === "hl" ? "hl" : "pen");
 }
 function fitAndPaint(cv, strokes, imgH){
   const r = cv.getBoundingClientRect(); if (!r.width || !r.height) return;
@@ -1464,7 +1520,7 @@ function neLoad(id){
   neFit();
 }
 function neFit(){ fitAndPaint($("#neCv"), NE.strokes, neImgH()); }
-function neSetTool(t){ NE.tool = t; document.querySelectorAll("#noteEd [data-ntool]").forEach(b => b.setAttribute("aria-pressed", b.dataset.ntool === t)); $("#neCv").style.cursor = t === "eraser" ? "cell" : "crosshair"; }
+function neSetTool(t){ NE.tool = t; setTimeout(updateSizeIcons, 0); document.querySelectorAll("#noteEd [data-ntool]").forEach(b => b.setAttribute("aria-pressed", b.dataset.ntool === t)); $("#neCv").style.cursor = t === "eraser" ? "cell" : "crosshair"; }
 async function neSave(final){
   clearTimeout(NE.saveT);
   if (!NE.dirty || !NE.id) return;
@@ -1493,7 +1549,7 @@ async function neClose(){
     const cr = cv.getBoundingClientRect(), r = { left: cr.left, top: cr.top, width: cr.width, height: neImgH() };
     const pt = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
     if (NE.tool === "eraser"){ cur = { erase: true }; neErase(pt, r); return; }
-    cur = { t: NE.tool, p: [+pt.x.toFixed(4), +pt.y.toFixed(4)] }; NE.strokes.push(cur); neFit();
+    cur = newStroke(NE.tool, pt, e); NE.strokes.push(cur); neFit();
   });
   cv.addEventListener("pointermove", e => {
     if (!cur) return;
@@ -1502,11 +1558,14 @@ async function neClose(){
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
     for (const ev of evs.length ? evs : [e]){
       const pt = { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
-      if (cur.erase) neErase(pt, r); else cur.p.push(+pt.x.toFixed(4), +pt.y.toFixed(4));
+      if (cur.erase) neErase(pt, r); else pushPoint(cur, pt, ev);
     }
-    if (!cur.erase) neFit();
+    if (!cur.erase){
+      if (cur.t === "hl") neFit();
+      else { const dpr = window.devicePixelRatio || 1; paintTail(cv.getContext("2d"), cv.width, r.height * dpr, cur, cur.drawn || 1); cur.drawn = cur.p.length / 2; }
+    }
   });
-  const end = () => { if (!cur) return; const was = cur; cur = null; if (!was.pan) neQueueSave(); };
+  const end = () => { if (!cur) return; const was = cur; cur = null; if (was.drawn) delete was.drawn; if (!was.pan){ neFit(); neQueueSave(); } };
   cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
   function neErase(pt, r){
     const rad = 14, before = NE.strokes.length;
@@ -1517,6 +1576,7 @@ async function neClose(){
     const t = e.target.closest("[data-ntool]"); if (t){ neSetTool(t.dataset.ntool); return; }
     const a = e.target.closest("[data-nact]"); if (!a) return;
     const act = a.dataset.nact;
+    if (act === "size"){ cycleSize(NE.tool === "hl" ? "hl" : "pen"); return; }
     if (act === "undo"){ if (NE.strokes.length){ NE.strokes.pop(); neFit(); neQueueSave(); } }
     else if (act === "clear"){ if (NE.strokes.length && confirm("이 문제의 필기를 모두 지울까요?")){ NE.strokes = []; neFit(); neQueueSave(); } }
     else if (act === "padplus"){ neSetPad(NE.pad + PAD_STEP); neQueueSave(); setTimeout(() => { const b = $(".ne-body"); b.scrollTop = b.scrollHeight; }, 60); }
@@ -1539,7 +1599,8 @@ async function neClose(){
     if (e.key === "ArrowLeft"){ e.preventDefault(); neStep(-1); }
     else if (e.key === "ArrowRight"){ e.preventDefault(); neStep(1); }
     else if (k === "z" || ((e.ctrlKey || e.metaKey) && k === "z")){ e.preventDefault(); if (NE.strokes.length){ NE.strokes.pop(); neFit(); neQueueSave(); } }
-    else if ({ p: "red", b: "black", h: "hl", e: "eraser" }[k]){ e.preventDefault(); neSetTool({ p: "red", b: "black", h: "hl", e: "eraser" }[k]); }
+    else if (k === "s"){ e.preventDefault(); cycleSize(NE.tool === "hl" ? "hl" : "pen"); }
+    else if ({ p: "red", b: "black", u: "blue", h: "hl", e: "eraser" }[k]){ e.preventDefault(); neSetTool({ p: "red", b: "black", u: "blue", h: "hl", e: "eraser" }[k]); }
   });
 })();
 
