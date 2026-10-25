@@ -963,7 +963,7 @@ function renderResult(r = lastResult, back = null){
 let zoomList = [], zoomPos = -1;
 let zoomShowExpl = true;
 function zoom(id){
-  zoomList = [...new Set([...document.querySelectorAll("#app [data-zoom]")].map(el => el.dataset.zoom))];
+  zoomList = currentView() === "manage" && manageIds.includes(id) ? manageIds.slice() : [...new Set([...document.querySelectorAll("#app [data-zoom]")].map(el => el.dataset.zoom))];
   zoomPos = zoomList.indexOf(id);
   zoomShowExpl = currentView() !== "manage";
   showZoom(id);
@@ -1155,6 +1155,7 @@ function importBatches(){
   return out.reverse();
 }
 const selected = new Set();
+let manageLimit = 120, manageIds = [];
 async function moveQuestions(ids, subject){
   let done = 0; const remap = new Map();
   for (const id of ids){
@@ -1194,7 +1195,8 @@ function renderManage(){
   const excelOrder = (a, b) => (a.subject || "").localeCompare(b.subject || "", "ko") || natSort(String(a.src || a.no || ""), String(b.src || b.no || "")) || (a.createdAt||0) - (b.createdAt||0);
   list.sort(f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : f.sort === "new" ? (a, b) => (b.createdAt||0) - (a.createdAt||0) : excelOrder);
   [...selected].forEach(id => { if (!S.questions.has(id)) selected.delete(id); });
-  const shown = list.slice(0, 120);
+  const shown = list.slice(0, manageLimit);
+  manageIds = list.map(q => q.id);
   const bLabel = b => { const d = new Date(b.at); return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")} 등록 · ${b.ids.size}문제`; };
   $("#app").innerHTML = `
     <h1>문제 관리</h1>
@@ -1236,7 +1238,10 @@ function renderManage(){
           ${answersOf(q).length > 1 ? `<span class="note">${q.noAnswer ? "정답 없음" : "복수정답 " + ansLabel(q)}</span>` : ""}<span class="rate${r >= 0.5 ? " hi" : ""}">${q.n ? `${q.n}회 중 ${q.w}회 틀림` : "안 푼 문제"}</span></div>
         <div class="mrow"><span>${q.lastAt ? Math.floor((now - q.lastAt)/dayMs) + "일 전" : ""}${q.last === 2 ? " · 헷갈림" : q.last === 0 ? " · 최근 틀림" : ""}</span><span><button class="btn ghost" data-note="${q.id}" style="padding:2px 6px">${q.note && q.note.length ? "필기 ✓" : "필기"}</button><button class="btn ghost danger" data-del="${q.id}" style="padding:2px 6px">삭제</button></span></div>
       </div>`;}).join("")}</div>`
-      : `<div class="empty"><b>${S.questions.size ? "조건에 맞는 문제가 없어요" : "아직 등록한 문제가 없어요"}</b>${S.questions.size ? "다른 보기를 골라보세요." : `<a href="#add">문제 등록</a>에서 이미지를 올려보세요.`}</div>`}`;
+      : `<div class="empty"><b>${S.questions.size ? "조건에 맞는 문제가 없어요" : "아직 등록한 문제가 없어요"}</b>${S.questions.size ? "다른 보기를 골라보세요." : `<a href="#add">문제 등록</a>에서 이미지를 올려보세요.`}</div>`}
+    ${list.length > shown.length ? `<div style="text-align:center;margin:20px 0"><button class="btn" id="moreBtn">더 보기 (${list.length - shown.length}문제 남음)</button></div>` : ""}`;
+  ["#fs", "#fb", "#fk", "#fo"].forEach(sel => $(sel).addEventListener("change", () => { manageLimit = 120; }, { capture: true }));
+  if ($("#moreBtn")) $("#moreBtn").onclick = () => { const y = window.scrollY; manageLimit += 240; renderManage(); window.scrollTo(0, y); };
   $("#fs").onchange = e => { f.subject = e.target.value; renderManage(); };
   $("#fb").onchange = e => { f.batch = e.target.value; renderManage(); };
   $("#fk").onchange = e => { f.kind = e.target.value; renderManage(); };
@@ -1288,7 +1293,7 @@ function renderManage(){
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
     if (e.target.closest("[data-pick], label.check")) return;
-    const nb = e.target.closest("button[data-note]"); if (nb) return openNoteEditor(nb.dataset.note, shown.map(q => q.id));
+    const nb = e.target.closest("button[data-note]"); if (nb) return openNoteEditor(nb.dataset.note, manageIds);
     const z = e.target.closest("[data-zoom]"); if (z) return zoom(z.dataset.zoom);
     const d = e.target.closest("[data-del]");
     if (d && confirm("이 문제를 지울까요? 되돌릴 수 없어요.")){
