@@ -99,6 +99,15 @@ textarea{resize:vertical;min-height:72px;font-family:var(--sans);letter-spacing:
 .q{background:var(--sheet);border:1px solid var(--line);border-radius:10px;padding:18px 18px 14px;margin-bottom:16px;scroll-margin-top:84px}
 .q.current{border-color:var(--omr-line)}
 .qimg{position:relative}
+.one #qs .q{display:none}
+.one #qs .q.current{display:block}
+.qnav{position:fixed;top:50%;transform:translateY(-50%);width:56px;height:56px;border-radius:50%;border:1px solid var(--line);background:var(--sheet);color:var(--ink);font-size:34px;line-height:1;display:grid;place-items:center;padding:0 0 4px;z-index:7;box-shadow:0 6px 20px rgba(0,0,0,.14)}
+.qnav:hover:not(:disabled){background:var(--omr);border-color:var(--omr);color:#fff}
+.qnav:disabled{opacity:.3;cursor:default}
+.qnav.prev{left:max(10px,env(safe-area-inset-left,0px))}
+.qnav.next{right:max(10px,env(safe-area-inset-right,0px))}
+@media (min-width:861px){.qnav.next{right:max(10px,calc((100vw - 1120px)/2 - 66px))}.qnav.prev{left:max(10px,calc((100vw - 1120px)/2 - 66px))}}
+@media print{.qnav{display:none !important}}
 .ink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply}
 body.drawing .ink{pointer-events:auto;touch-action:none;cursor:crosshair}
 body.drawing.erasing .ink{cursor:cell}
@@ -525,6 +534,14 @@ function startExam(ids, subject, limitSec){
 }
 
 let curIdx = 0;
+const viewOne = () => !exam.paper && (ls.get("gm-viewmode") || "one") === "one";
+function goQ(i){
+  if (!exam) return;
+  i = Math.max(0, Math.min(exam.ids.length - 1, i));
+  setCurrent(i);
+  if (viewOne()) { const top = $("#qs"); if (top && top.getBoundingClientRect().top < 0) top.scrollIntoView({block:"start"}); }
+  else { const el = $("#q-" + i); if (el) el.scrollIntoView({behavior:"smooth", block:"start"}); }
+}
 function renderExam(){
   exam.ids = exam.ids.filter(id => S.questions.has(id));
   if (!exam.ids.length){ exam = null; ls.del("gm-exam"); return renderStart(); }
@@ -532,8 +549,9 @@ function renderExam(){
   const subjLabel = exam.subject === "all" ? "섞어서" : exam.subject;
   $("#app").innerHTML = `
     <div class="exam-head">
-      <div><h1>${h(subjLabel)} 모의고사</h1><span class="note">${exam.ids.length}문항 · 제한 ${Math.round(exam.limitSec/60)}분</span></div>
+      <div><h1>${h(subjLabel)} 모의고사</h1><span class="note">${!exam.paper && viewOne() ? `<b id="qPos" style="color:var(--omr)"></b> · ` : ""}${exam.ids.length}문항 · 제한 ${Math.round(exam.limitSec/60)}분</span></div>
       <div class="tools">
+        ${exam.paper ? "" : `<button class="btn" id="viewBtn">${viewOne() ? "전체 스크롤로 보기" : "한 문제씩 보기"}</button>`}
         <button class="btn" id="paperBtn" aria-pressed="${!!exam.paper}">${exam.paper ? "문제 이미지 보기" : "종이로 풀기"}</button>
         <button class="btn" id="printBtn">인쇄</button>
         <select id="printInk" style="width:auto" aria-label="인쇄 선명도">${[["0","원본 그대로"],["1","글씨 진하게"],["2","아주 진하게"]].map(([v, t]) => `<option value="${v}" ${String(printInk()) === v ? "selected" : ""}>${t}</option>`).join("")}</select>
@@ -546,7 +564,7 @@ function renderExam(){
     ${exam.paper ? `<p class="note" style="margin:-6px 0 8px">종이에 푼 답을 숫자 패드로 1번부터 순서대로 입력하세요. 문제를 풀기 시작할 때 '시간 다시 재기'를 누르면 걸린 시간이 정확해져요.</p>
     <div class="keyhelp"><span><kbd>1</kbd>~<kbd>5</kbd> 답 입력</span><span><kbd>0</kbd> 또는 <kbd>.</kbd> 빈칸으로 넘기기</span><span><kbd>Backspace</kbd> 앞 문제로 돌아가 지우기</span><span><kbd>←</kbd><kbd>→</kbd> 이동</span><span><kbd>Enter</kbd> 제출</span></div>` : ""}
     <div class="print-head"><b>${h(subjLabel)} 모의고사 · ${exam.ids.length}문항</b><span>${new Date(exam.startAt).toLocaleDateString("ko-KR")} · 제한 ${Math.round(exam.limitSec/60)}분 · 점수 ______</span></div>
-    <div class="exam${exam.paper ? " paper" : ""}">
+    <div class="exam${exam.paper ? " paper" : ""}${viewOne() ? " one" : ""}">
       <div id="qs">${exam.ids.map((id, i) => {
         const q = S.questions.get(id);
         return `<section class="q" id="q-${i}" data-i="${i}">
@@ -573,7 +591,8 @@ function renderExam(){
       <span class="sep"></span>
       <button data-act="undo" title="되돌리기 (Z)" aria-label="되돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
       <button data-act="clear" title="이 문제 필기 모두 지우기" aria-label="이 문제 필기 지우기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
-    </div>`}`;
+    </div>`}
+    ${viewOne() ? `<button class="qnav prev" id="qPrev" aria-label="이전 문제">‹</button><button class="qnav next" id="qNext" aria-label="다음 문제">›</button>` : ""}`;
   $("#mobilebar").classList.remove("hidden");
 
   const app = $("#app");
@@ -583,7 +602,7 @@ function renderExam(){
     const f = e.target.closest("[data-flag]");
     if (f) { toggleFlag(+f.dataset.flag); return; }
     const g = e.target.closest("[data-go]");
-    if (g) { $("#q-" + g.dataset.go).scrollIntoView({behavior:"smooth", block:"start"}); if (exam.paper) setCurrent(+g.dataset.go); return; }
+    if (g) { if (exam.paper) { $("#q-" + g.dataset.go).scrollIntoView({behavior:"smooth", block:"start"}); setCurrent(+g.dataset.go); } else goQ(+g.dataset.go); return; }
     const qq = e.target.closest(".q"); if (qq && exam.paper) setCurrent(+qq.dataset.i);
   };
   $("#submit").onclick = $("#mSubmit").onclick = submitExam;
@@ -596,8 +615,14 @@ function renderExam(){
   $("#quit").onclick = () => { if (confirm("이 시험을 기록 없이 끝낼까요?")) { exam = null; ls.del("gm-exam"); render(); } };
 
   if (!exam.paper) setupInk();
+  if ($("#viewBtn")) $("#viewBtn").onclick = () => { ls.set("gm-viewmode", viewOne() ? "scroll" : "one"); const keep = curIdx; renderExam(); goQ(keep); };
+  if (viewOne()){
+    $("#qPrev").onclick = () => goQ(curIdx - 1);
+    $("#qNext").onclick = () => goQ(curIdx + 1);
+    document.querySelectorAll("#qs img").forEach(im => im.loading = "eager");
+  }
   const io = new IntersectionObserver(ents => {
-    if (exam.paper) return;
+    if (exam.paper || viewOne()) return;
     ents.forEach(en => { if (en.isIntersecting && en.intersectionRatio > 0.35) setCurrent(+en.target.dataset.i); });
   }, { threshold: [0.35] });
   document.querySelectorAll(".q").forEach(el => io.observe(el));
@@ -695,6 +720,10 @@ function setCurrent(i){
   curIdx = i;
   document.querySelectorAll(".q.current").forEach(x => x.classList.remove("current"));
   const el = $("#q-" + i); if (el) el.classList.add("current");
+  if ($("#qPos")) $("#qPos").textContent = `${i+1}번`;
+  if ($("#qPrev")) { $("#qPrev").disabled = i <= 0; $("#qNext").disabled = i >= exam.ids.length - 1; }
+  document.querySelectorAll(".orow .n").forEach(n => n.style.textDecoration = "");
+  const on = $(`#o-${i} .n`); if (on && viewOne()) on.style.textDecoration = "underline";
 }
 function moveTo(i){
   i = Math.max(0, Math.min(exam.ids.length - 1, i));
@@ -716,7 +745,7 @@ function setAnswer(i, c, advance){
   document.querySelectorAll(`[data-q="${i}"]`).forEach(b => b.setAttribute("aria-pressed", exam.answers[i] === +b.dataset.c));
   updateProgress();
   if (advance && exam.answers[i] && i + 1 < exam.ids.length){
-    setTimeout(() => { $("#q-" + (i+1)).scrollIntoView({behavior:"smooth", block:"start"}); setCurrent(i+1); }, 140);
+    setTimeout(() => goQ(i + 1), viewOne() ? 220 : 140);
   }
 }
 function toggleFlag(i){
@@ -752,6 +781,7 @@ document.addEventListener("keydown", e => {
   if (key in toolKeys){ e.preventDefault(); setInkTool(inkTool === toolKeys[key] ? null : toolKeys[key]); return; }
   if (key === "z"){ e.preventDefault(); inkUndo(); return; }
   if (e.key === "Escape" && inkTool){ setInkTool(null); return; }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight"){ e.preventDefault(); goQ(curIdx + (e.key === "ArrowRight" ? 1 : -1)); return; }
   if (n >= 1 && n <= qc){ e.preventDefault(); setAnswer(curIdx, n, true); }
   else if (e.key === "f" || e.key === "F"){ e.preventDefault(); toggleFlag(curIdx); }
 });
