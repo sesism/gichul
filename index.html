@@ -1215,10 +1215,15 @@ function renderManage(){
       <b id="selCount">${selected.size}문제 선택</b>
       <button class="btn ghost" data-sel="all">조건에 맞는 ${list.length}문제 모두 선택</button>
       <button class="btn ghost" data-sel="none">선택 해제</button>
+      <button class="btn ghost" data-sel="noted">필기한 문제만 선택</button>
       <span style="flex:1"></span>
       <select id="moveTo" style="width:auto">${st.subjects.map(s => `<option>${h(s)}</option>`).join("")}<option value="__new">+ 새 과목</option></select>
       <button class="btn" data-sel="move">선택한 문제 과목 옮기기</button>
       <button class="btn danger" data-sel="del">선택한 문제 삭제</button>
+      <span style="flex-basis:100%;height:0"></span>
+      <span class="note">필기한 이미지로 저장:</span>
+      <button class="btn" data-sel="img">파일로 받기(zip)</button>
+      ${S.mode === "local" && GD.linked ? `<button class="btn" data-sel="imgdrive">구글 드라이브에 올리기</button>` : ""}
     </div>` : ""}
     ${shown.length ? `<div class="qgrid" id="qgrid">${shown.map(q => {
       const r = rate(q);
@@ -1260,7 +1265,9 @@ function renderManage(){
       const act = b.dataset.sel;
       if (act === "all"){ list.forEach(q => selected.add(q.id)); document.querySelectorAll("[data-pick]").forEach(c => c.checked = true); updCount(); return; }
       if (act === "none"){ selected.clear(); document.querySelectorAll("[data-pick]").forEach(c => c.checked = false); updCount(); return; }
+      if (act === "noted"){ selected.clear(); list.forEach(q => { if (q.note && q.note.length) selected.add(q.id); }); document.querySelectorAll("[data-pick]").forEach(c => c.checked = selected.has(c.dataset.pick)); updCount(); if (!selected.size) toast("필기한 문제가 없어요."); return; }
       if (!selected.size){ toast("먼저 문제를 선택하세요."); return; }
+      if (act === "img" || act === "imgdrive"){ exportAnnotated([...selected], act === "img" ? "zip" : "drive", b); return; }
       if (act === "move"){
         const to = $("#moveTo").value; if (!to || to === "__new") return;
         if (!confirm(`선택한 ${selected.size}문제를 ‘${to}’ 과목으로 옮길까요? 풀이 기록은 그대로 따라가요.`)) return;
@@ -1526,6 +1533,71 @@ async function neClose(){
     else if ({ p: "red", b: "black", h: "hl", e: "eraser" }[k]){ e.preventDefault(); neSetTool({ p: "red", b: "black", h: "hl", e: "eraser" }[k]); }
   });
 })();
+
+/* export annotated images */
+async function annotatedBlob(q){
+  const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = Store.img(q); });
+  const scale = Math.min(1, 2000 / img.naturalWidth);
+  const w = Math.round(img.naturalWidth * scale), ih = Math.round(img.naturalHeight * scale);
+  const pad = q.note && q.note.length ? Math.round((q.notePad || 0) * w) : 0;
+  const c = document.createElement("canvas"); c.width = w; c.height = ih + pad;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, ih + pad); ctx.drawImage(img, 0, 0, w, ih);
+  if (pad){ ctx.strokeStyle = "#d5d8de"; ctx.lineWidth = 1; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(0, ih + 0.5); ctx.lineTo(w, ih + 0.5); ctx.stroke(); ctx.setLineDash([]); }
+  ctx.globalCompositeOperation = "multiply"; paintStrokes(ctx, w, ih, q.note);
+  return await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
+}
+const annName = (q, k) => `${q.subject}_${String(q.src || q.no || (k + 1)).replace(/[\\/:*?"<>|\s]+/g, "_")}.jpg`;
+async function gdSubFolder(parent, name){
+  const q = encodeURIComponent(`name='${name}' and '${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r = await (await gdApi(`drive/v3/files?q=${q}&fields=files(id)`)).json();
+  if (r.files && r.files[0]) return r.files[0].id;
+  return (await (await gdApi("drive/v3/files?fields=id", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, parents: [parent], mimeType: "application/vnd.google-apps.folder" }) })).json()).id;
+}
+async function gdUploadFile(folder, name, blob, mime, map){
+  const id = map[name];
+  const init = await gdApi(id ? `upload/drive/v3/files/${id}?uploadType=resumable` : "upload/drive/v3/files?uploadType=resumable", {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mime },
+    body: JSON.stringify(id ? {} : { name, parents: [folder], mimeType: mime })
+  });
+  const loc = init.headers.get("Location"); if (!loc) throw new Error("no upload url");
+  const r = await fetch(loc, { method: "PUT", headers: { "Content-Type": mime }, body: blob });
+  if (!r.ok){ const e = new Error("upload " + r.status); e.status = r.status; throw e; }
+  map[name] = (await r.json()).id;
+}
+async function exportAnnotated(ids, dest, btn){
+  const qs = ids.map(id => S.questions.get(id)).filter(Boolean);
+  if (!qs.length) return;
+  const label = btn.textContent; btn.disabled = true;
+  try{
+    if (dest === "zip"){
+      const zip = new JSZip(), used = new Set();
+      for (let k = 0; k < qs.length; k++){
+        let nm = annName(qs[k], k); while (used.has(nm)) nm = nm.replace(/\.jpg$/, `_${k}.jpg`); used.add(nm);
+        zip.file(nm, await annotatedBlob(qs[k]));
+        btn.textContent = `만드는 중 ${k + 1}/${qs.length}`;
+      }
+      btn.textContent = "압축하는 중…";
+      const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+      const d = new Date();
+      await saveFile(`필기이미지-${d.getMonth() + 1}월${d.getDate()}일-${qs.length}장.zip`, blob);
+      toast(`필기 이미지 ${qs.length}장을 저장했어요.`);
+    } else {
+      if (!gdTokenOk()){ toast("드라이브 연결 시간이 지났어요. 맨 위 구글 드라이브 백업에서 다시 연결한 뒤 시도해 주세요."); refreshBackupUI(); return; }
+      const sub = await gdSubFolder(await gdFolder(), "필기 이미지");
+      const map = Object.fromEntries((await gdList(sub)).map(f => [f.name, f.id]));
+      for (let k = 0; k < qs.length; k++){
+        await gdUploadFile(sub, annName(qs[k], k), await annotatedBlob(qs[k]), "image/jpeg", map);
+        btn.textContent = `올리는 중 ${k + 1}/${qs.length}`;
+      }
+      toast(`드라이브 ‘${GD_FOLDER} › 필기 이미지’ 폴더에 ${qs.length}장을 올렸어요.`);
+    }
+  } catch (err){
+    if (err && err.status === 401){ GD.token = null; ls.del("gd-token"); toast("드라이브 연결 시간이 지났어요. 다시 연결한 뒤 시도해 주세요."); refreshBackupUI(); }
+    else if (!err || (err.name !== "AbortError" && err.code !== "cancelled")) toast("이미지를 만들지 못했어요.");
+  }
+  btn.disabled = false; btn.textContent = label;
+}
 
 /* ---------- excel import ---------- */
 const xImp = { rows: null, fileName: "", subject: null, images: new Map() };
