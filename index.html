@@ -1994,6 +1994,17 @@ function renderSettings(){
   $("#app").innerHTML = `
     <h1>설정</h1>
     <p class="lede">바꾸면 바로 적용되고, 이 기기에 저장돼요.</p>
+    <h2>과목</h2>
+    <div class="panel stack">
+      <div class="note">문제를 등록하고 시험 보는 과목이에요. 이름을 바꾸면 그 과목의 문제와 기록도 함께 바뀌어요.</div>
+      ${S.settings.subjects.map(sub => { const n = [...S.questions.values()].filter(q => q.subject === sub).length; return `<div class="setrow"><div><b>${h(sub)}</b> <span class="note">${n}문제</span></div><div style="display:flex;gap:6px"><button class="btn ghost" data-subj="rename" data-name="${h(sub)}">이름 바꾸기</button><button class="btn ghost danger" data-subj="del" data-name="${h(sub)}" ${n ? `title="문제가 있는 과목은 지울 수 없어요"` : ""}>삭제</button></div></div>`; }).join("")}
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="newSubj" placeholder="새 과목 이름 (예: 형법)" style="flex:1;min-width:200px"><button class="btn primary" data-subj="add">과목 추가</button></div>
+    </div>
+    <div class="panel stack" style="margin-top:12px">
+      <div class="note">기록 탭에서 점수만 직접 기록하는 과목이에요(국어, 영어처럼 따로 푸는 시험).</div>
+      ${(S.settings.manualSubjects || []).map(sub => `<div class="setrow"><div><b>${h(sub)}</b> <span class="note">${S.history.filter(e => e.subject === sub).length}회 기록</span></div><div><button class="btn ghost danger" data-msubj="del" data-name="${h(sub)}">목록에서 빼기</button></div></div>`).join("")}
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="text" id="newMSubj" placeholder="직접 기록할 과목 (예: 한국사)" style="flex:1;min-width:200px"><button class="btn" data-msubj="add">추가</button></div>
+    </div>
     <h2>글자</h2>
     <div class="panel stack">
       ${row("해설 글자 크기", "채점 결과, 크게 보기, 필기 화면의 해설에 적용돼요.", `<div style="display:flex;align-items:center;gap:12px"><input type="range" id="explSize" min="13" max="26" step="1" value="${ex}" style="width:200px;accent-color:var(--omr)"><b id="explVal" style="min-width:4ch">${ex}px</b></div>`)}
@@ -2019,7 +2030,45 @@ function renderSettings(){
     </div>
     <p class="note" style="margin-top:24px">백업과 구글 드라이브 연결은 <a href="#manage">문제 관리</a> 탭 맨 위에 있어요.</p>`;
   $("#explSize").oninput = e => { const v = +e.target.value; ls.set("gm-explsize", v); $("#explVal").textContent = v + "px"; applyPrefs(); };
-  $("#app").onclick = e => {
+  $("#app").onclick = async e => {
+    const sb = e.target.closest("[data-subj]");
+    if (sb){
+      const act = sb.dataset.subj, name = sb.dataset.name, list = S.settings.subjects;
+      if (act === "add"){
+        const v = $("#newSubj").value.trim(); if (!v) { toast("과목 이름을 입력하세요."); return; }
+        if (list.includes(v)) { toast("이미 있는 과목이에요."); return; }
+        list.push(v); try { await Store.saveSettings(); } catch {} abWrite("records"); toast(`‘${v}’ 과목을 추가했어요.`); renderSettings();
+      } else if (act === "rename"){
+        const v = (prompt(`‘${name}’의 새 이름`, name) || "").trim(); if (!v || v === name) return;
+        if (list.includes(v) && !confirm(`‘${v}’ 과목이 이미 있어요. 두 과목을 합칠까요?`)) return;
+        sb.disabled = true; toast("바꾸는 중…");
+        await moveQuestions([...S.questions.values()].filter(q => q.subject === name).map(q => q.id), v);
+        S.settings.subjects = S.settings.subjects.filter(x => x !== name); if (!S.settings.subjects.includes(v)) S.settings.subjects.push(v);
+        S.history.forEach(h2 => { if (h2.subject === name) h2.subject = v; });
+        try { await Store.saveSettings(); await Store.saveHistory(); } catch {}
+        abWrite("full"); toast(`‘${name}’을(를) ‘${v}’(으)로 바꿨어요.`); renderSettings();
+      } else if (act === "del"){
+        if ([...S.questions.values()].some(q => q.subject === name)) { toast("문제가 있는 과목은 지울 수 없어요. 문제 관리에서 문제를 옮기거나 지운 뒤 삭제하세요."); return; }
+        if (list.length <= 1) { toast("과목이 하나는 있어야 해요."); return; }
+        if (!confirm(`‘${name}’ 과목을 목록에서 지울까요? 지난 시험 기록은 남아요.`)) return;
+        S.settings.subjects = list.filter(x => x !== name); try { await Store.saveSettings(); } catch {} abWrite("records"); renderSettings();
+      }
+      return;
+    }
+    const mb = e.target.closest("[data-msubj]");
+    if (mb){
+      const ms = S.settings.manualSubjects = S.settings.manualSubjects || [];
+      if (mb.dataset.msubj === "add"){
+        const v = $("#newMSubj").value.trim(); if (!v) { toast("과목 이름을 입력하세요."); return; }
+        if (ms.includes(v)) { toast("이미 있는 과목이에요."); return; }
+        ms.push(v);
+      } else {
+        if (!confirm(`‘${mb.dataset.name}’을(를) 직접 기록 목록에서 뺄까요? 지난 기록은 남아요.`)) return;
+        S.settings.manualSubjects = ms.filter(x => x !== mb.dataset.name);
+      }
+      try { await Store.saveSettings(); } catch {} abWrite("records"); renderSettings();
+      return;
+    }
     const b = e.target.closest(".seg[data-pref] button"); if (!b) return;
     const pref = b.parentElement.dataset.pref, raw = b.dataset.v;
     const val = raw === "true" ? true : raw === "false" ? false : /^\d+$/.test(raw) ? +raw : raw;
