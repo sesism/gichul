@@ -1598,6 +1598,7 @@ async function writeFile(dir, name, blob){
   const w = await fh.createWritable(); await w.write(blob); await w.close();
 }
 function abWrite(kind){
+  gdWrite(kind);
   if (!AB.dir) return Promise.resolve();
   if (AB.busy){ AB.queued = mergeKind(AB.queued, kind); return AB.busy; }
   AB.busy = (async () => {
@@ -1628,19 +1629,21 @@ async function abRestore(){
   toast(`백업에서 문제 ${S.questions.size}개를 복구했어요.`);
   render();
 }
-function startBannerHtml(){
+function startBannerHtml(){ return gdBannerHtml() + abBannerHtml(); }
+function abBannerHtml(){
   if (AB.supported && AB.dir){
     if (AB.perm !== "granted") return `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">${S.questions.size ? "자동 백업을 이어가려면 백업 폴더 사용을 허용해 주세요." : "저장된 문제가 없어요. 백업 폴더에서 복구할 수 있어요."}</span><button class="btn" data-act="allow">${S.questions.size ? "허용하기" : "복구하기"}</button></div>`;
     if (!S.questions.size) return `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">저장된 문제가 없어요. 백업 폴더에 백업이 있으면 복구할 수 있어요.</span><button class="btn" data-act="restore">복구하기</button></div>`;
     return AB.lastErr ? `<div class="banner">${AB.lastErr} <a href="#manage">문제 관리</a> 탭에서 확인해 주세요.</div>` : "";
   }
+  if (GD.linked) return "";
   return `<div class="banner">문제는 이 컴퓨터의 브라우저에만 저장돼요. ${AB.supported ? `<a href="#manage">문제 관리</a> 탭에서 백업 폴더를 지정하면 자동으로 백업돼요.` : `브라우저 데이터를 지우면 함께 사라지니 <a href="#manage">문제 관리</a> 탭에서 백업 파일을 자주 저장해 두세요.`} ${backupNote()}</div>`;
 }
 function backupPanelHtml(){
   let autoRow = "";
   if (S.mode === "local"){
     let status, btns;
-    if (!AB.supported){ status = navigator.maxTouchPoints > 1 ? "이 기기에서는 자동 백업이 지원되지 않아요. 문제를 등록했거나 시험을 여러 번 본 뒤에는 아래 ‘백업 파일 저장’으로 직접 백업해 두세요." : "자동 백업은 크롬이나 엣지에서만 쓸 수 있어요. 대신 아래 버튼으로 직접 백업하세요."; btns = ""; }
+    if (!AB.supported){ status = navigator.maxTouchPoints > 1 ? (GD.linked ? "이 기기에서는 폴더 자동 백업 대신 위의 구글 드라이브 백업을 써요." : "이 기기에서는 폴더 자동 백업이 지원되지 않아요. 위의 구글 드라이브 백업을 연결하거나, 아래 ‘백업 파일 저장’으로 직접 백업해 두세요.") : "자동 백업은 크롬이나 엣지에서만 쓸 수 있어요. 대신 아래 버튼으로 직접 백업하세요."; btns = ""; }
     else if (!AB.dir){ status = "백업 폴더를 한 번 지정하면, 시험을 제출하거나 문제를 등록할 때마다 그 폴더에 자동으로 저장돼요. 브라우저 데이터가 지워져도 이 폴더에서 바로 복구할 수 있어요."; btns = `<button class="btn primary" data-act="pick">백업 폴더 지정</button>`; }
     else if (AB.perm !== "granted"){ status = `<span style="color:var(--warn)">자동 백업이 멈춰 있어요. 폴더 ‘${h(AB.dir.name)}’ 사용을 허용해 주세요.</span>`; btns = `<button class="btn primary" data-act="allow">허용하기</button><button class="btn ghost" data-act="off">끄기</button>`; }
     else {
@@ -1650,7 +1653,7 @@ function backupPanelHtml(){
     autoRow = `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:220px"><b>자동 백업</b><div class="note">${status}</div></div>${btns}</div>`;
   }
   const manualNote = AB.dir && AB.perm === "granted" ? "다른 컴퓨터로 옮기거나 따로 보관할 때 쓰세요." : (backupNote() || "최근 백업이 최신 상태예요.");
-  return `${autoRow}
+  return `${S.mode === "local" ? gdRowHtml() : ""}${autoRow}
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap${autoRow ? ";border-top:1px solid var(--line);padding-top:14px" : ""}">
       <div style="flex:1;min-width:220px"><b>백업 파일</b><div class="note">${manualNote}</div></div>
       <button class="btn" data-act="out" ${S.questions.size ? "" : "disabled"}>백업 파일 저장</button>
@@ -1815,7 +1818,205 @@ function renderHistory(){
 }
 
 /* ---------- boot ---------- */
+/* ---------- Google Drive auto backup ---------- */
+const GD_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const GD_FOLDER = "기출모의고사 백업", GD_REC = "기출모의고사-기록.json";
+const gdChunkName = c => `기출모의고사-문제-${String(c + 1).padStart(2, "0")}.json`;
+const GD = {
+  clientId: ls.get("gd-client") || "", linked: !!ls.get("gd-linked"),
+  token: null, exp: 0, folder: ls.get("gd-folder") || null,
+  pending: ls.get("gd-pending") || null, busy: null, progress: "", lastErr: "", needLogin: false
+};
+(() => { const t = ls.get("gd-token"); if (t && t.exp > Date.now()) { GD.token = t.t; GD.exp = t.exp; } })();
+const gdTokenOk = () => !!GD.token && GD.exp > Date.now() + 30000;
+const gdRedirectUri = () => location.origin + location.pathname.replace(/index\.html$/, "");
+function gdLogin(silent, after){
+  if (!GD.clientId){ toast("클라이언트 ID를 먼저 입력하세요."); return; }
+  const st = Math.random().toString(36).slice(2);
+  ls.set("gd-state", st); ls.set("gd-return", currentView());
+  if (after) ls.set("gd-after", after);
+  const p = new URLSearchParams({ client_id: GD.clientId, redirect_uri: gdRedirectUri(), response_type: "token", scope: GD_SCOPE, include_granted_scopes: "true", state: st });
+  if (silent) p.set("prompt", "none");
+  location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + p.toString();
+}
+function gdParseReturn(){
+  const raw = location.hash.slice(1);
+  if (!/(^|&)(access_token|error)=/.test(raw)) return null;
+  const p = new URLSearchParams(raw);
+  const ok = p.get("state") && p.get("state") === ls.get("gd-state");
+  let result = "error";
+  if (ok && p.get("access_token")){
+    GD.token = p.get("access_token");
+    GD.exp = Date.now() + (Math.max(60, +p.get("expires_in") || 3600) - 60) * 1000;
+    ls.set("gd-token", { t: GD.token, exp: GD.exp });
+    const first = !GD.linked;
+    GD.linked = true; ls.set("gd-linked", true); GD.needLogin = false;
+    result = first ? "linked" : "refreshed";
+  } else if (ok && /required/.test(p.get("error") || "")) { GD.needLogin = true; result = "need"; }
+  else if (ok && p.get("error") === "access_denied") { result = "denied"; }
+  history.replaceState(null, "", location.pathname + location.search + "#" + (ls.get("gd-return") || "exam"));
+  return result;
+}
+async function gdApi(path, opt = {}){
+  const r = await fetch("https://www.googleapis.com/" + path, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + GD.token } });
+  if (!r.ok){ const e = new Error("drive " + r.status); e.status = r.status; throw e; }
+  return r;
+}
+async function gdFolder(){
+  if (GD.folder) return GD.folder;
+  const q = encodeURIComponent(`name='${GD_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r = await (await gdApi(`drive/v3/files?q=${q}&fields=files(id)&spaces=drive`)).json();
+  let id = r.files && r.files[0] && r.files[0].id;
+  if (!id){
+    id = (await (await gdApi("drive/v3/files?fields=id", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: GD_FOLDER, mimeType: "application/vnd.google-apps.folder" }) })).json()).id;
+  }
+  GD.folder = id; ls.set("gd-folder", id); return id;
+}
+async function gdList(folder){
+  const q = encodeURIComponent(`'${folder}' in parents and trashed=false`);
+  const r = await (await gdApi(`drive/v3/files?q=${q}&fields=files(id,name,modifiedTime,size)&pageSize=500`)).json();
+  return r.files || [];
+}
+async function gdUpload(folder, name, blob, map){
+  const id = map[name];
+  const init = await gdApi(id ? `upload/drive/v3/files/${id}?uploadType=resumable` : "upload/drive/v3/files?uploadType=resumable", {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": "application/json" },
+    body: JSON.stringify(id ? {} : { name, parents: [folder], mimeType: "application/json" })
+  });
+  const loc = init.headers.get("Location");
+  if (!loc){ const e = new Error("no upload url"); e.status = 0; throw e; }
+  const r = await fetch(loc, { method: "PUT", headers: { "Content-Type": "application/json" }, body: blob });
+  if (!r.ok){ const e = new Error("upload " + r.status); e.status = r.status; throw e; }
+  const j = await r.json(); map[name] = j.id;
+}
+async function gdChunkBlob(qs, c){
+  const parts = ['{"app":"gichul-mock","kind":"full","version":1,"chunk":' + c + ',"exportedAt":' + Date.now() + ',"questions":['];
+  for (let i = 0; i < qs.length; i++){
+    const q = qs[i];
+    const blob = q.blob || await (await fetch(Store.img(q))).blob();
+    const { blob: _b, img: _i, shard: _s, ...meta } = q;
+    parts.push((i ? "," : "") + JSON.stringify({ ...meta, image: await blobToDataURL(blob) }));
+  }
+  parts.push("]}");
+  return new Blob(parts, { type: "application/json" });
+}
+async function gdPush(kind){
+  let folder;
+  try { folder = await gdFolder(); const files = await gdList(folder); var map = Object.fromEntries(files.map(f => [f.name, f.id])); var names = files.map(f => f.name); }
+  catch (err){ if (err.status === 404){ GD.folder = null; ls.del("gd-folder"); } throw err; }
+  if (kind === "full"){
+    const qs = [...S.questions.values()].sort((a, b) => a.id < b.id ? -1 : 1);
+    const per = 40, n = Math.ceil(qs.length / per);
+    for (let c = 0; c < n; c++){
+      GD.progress = `문제 ${c + 1}/${n} 묶음 저장 중`; refreshBackupUI();
+      await gdUpload(folder, gdChunkName(c), await gdChunkBlob(qs.slice(c * per, (c + 1) * per), c), map);
+    }
+    for (const nm of names){ const m = nm.match(/^기출모의고사-문제-(\d+)\.json$/); if (m && +m[1] > n){ try { await gdApi(`drive/v3/files/${map[nm]}`, { method: "DELETE" }); } catch {} } }
+    ls.set("gd-chunks", n); ls.set("gd-lastFull", Date.now());
+  }
+  GD.progress = "기록 저장 중"; refreshBackupUI();
+  const metas = [...S.questions.values()].map(({ blob, img, shard, ...m }) => m);
+  const rec = new Blob([JSON.stringify({ app: "gichul-mock", kind: "records", version: 1, exportedAt: Date.now(), chunks: ls.get("gd-chunks") || 0, settings: S.settings, history: S.history, questions: metas })], { type: "application/json" });
+  await gdUpload(folder, GD_REC, rec, map);
+  ls.set("gd-lastRec", Date.now());
+}
+function gdWrite(kind){
+  if (S.mode !== "local" || !GD.linked) return;
+  GD.pending = mergeKind(GD.pending, kind); ls.set("gd-pending", GD.pending);
+  if (!gdTokenOk()){ refreshBackupUI(); return; }
+  if (GD.busy) return;
+  GD.busy = (async () => {
+    try{
+      while (GD.pending){
+        const k = GD.pending; GD.pending = null; ls.set("gd-pending", null);
+        try { await gdPush(k); }
+        catch (err){ GD.pending = mergeKind(GD.pending, k); ls.set("gd-pending", GD.pending); throw err; }
+      }
+      GD.lastErr = "";
+    } catch (err){
+      if (err && err.status === 401){ GD.token = null; ls.del("gd-token"); GD.lastErr = "드라이브 연결 시간이 지났어요. 다시 연결하면 이어서 저장돼요."; }
+      else GD.lastErr = navigator.onLine === false ? "인터넷이 연결되면 드라이브에 저장할게요." : "드라이브 백업에 실패했어요. 잠시 뒤 다시 시도해 주세요.";
+    } finally { GD.busy = null; GD.progress = ""; refreshBackupUI(); }
+  })();
+}
+window.addEventListener("online", () => { if (GD.pending) gdWrite(GD.pending); });
+async function gdRestore(){
+  if (!gdTokenOk()){ gdLogin(false, "restore"); return; }
+  try{
+    toast("구글 드라이브에서 복구하고 있어요…");
+    const folder = await gdFolder(); const files = await gdList(folder);
+    const recF = files.find(f => f.name === GD_REC);
+    const chunks = files.filter(f => /^기출모의고사-문제-\d+\.json$/.test(f.name)).sort((a, b) => a.name.localeCompare(b.name));
+    if (!recF && !chunks.length){ toast("드라이브에 백업이 아직 없어요."); return; }
+    let minAt = Infinity;
+    for (let k = 0; k < chunks.length; k++){
+      GD.progress = `복구 중 ${k + 1}/${chunks.length}`; refreshBackupUI(); toast(`복구 중 ${k + 1}/${chunks.length}`);
+      const data = await (await gdApi(`drive/v3/files/${chunks[k].id}?alt=media`)).json();
+      minAt = Math.min(minAt, data.exportedAt || 0);
+      await importData(data, false);
+    }
+    if (recF){ const rec = await (await gdApi(`drive/v3/files/${recF.id}?alt=media`)).json(); await applyRecords(rec, isFinite(minAt) ? minAt : 0); if (rec.chunks) ls.set("gd-chunks", rec.chunks); }
+    GD.progress = ""; toast(`드라이브에서 문제 ${S.questions.size}개를 복구했어요.`);
+    render();
+  } catch (err){
+    GD.progress = "";
+    if (err && err.status === 401){ GD.token = null; ls.del("gd-token"); gdLogin(false, "restore"); return; }
+    toast("드라이브에서 복구하지 못했어요."); refreshBackupUI();
+  }
+}
+async function gdHasBackup(){
+  try { const files = await gdList(await gdFolder()); return files.some(f => f.name === GD_REC); } catch { return false; }
+}
+function gdUnlink(){
+  if (!confirm("구글 드라이브 백업 연결을 끊을까요? 드라이브에 있는 백업 파일은 그대로 남아요.")) return;
+  try { if (GD.token) fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(GD.token), { method: "POST" }).catch(() => {}); } catch {}
+  GD.linked = false; GD.token = null; GD.pending = null; GD.folder = null;
+  ["gd-linked", "gd-token", "gd-pending", "gd-folder"].forEach(k => ls.del(k));
+  refreshBackupUI();
+}
+function gdRowHtml(){
+  let status, btns;
+  if (!GD.clientId){
+    status = `구글 드라이브에 자동으로 백업하려면 구글 클라우드에서 받은 <b>클라이언트 ID</b>를 넣어주세요.<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input type="text" id="gdClient" placeholder="123456-abc.apps.googleusercontent.com" style="flex:1;min-width:220px"><button class="btn primary" data-gd="save">저장하고 연결</button></div>`;
+    btns = "";
+  } else if (!GD.linked){
+    status = "구글 계정으로 한 번 로그인하면, 시험을 제출하거나 문제를 등록할 때마다 드라이브의 ‘기출모의고사 백업’ 폴더에 자동으로 저장돼요.";
+    btns = `<button class="btn primary" data-gd="login">구글 드라이브 연결</button><button class="btn ghost" data-gd="client">ID 바꾸기</button>`;
+  } else if (!gdTokenOk()){
+    status = `<span style="color:var(--warn)">${GD.pending ? "드라이브에 아직 저장하지 못한 내용이 있어요. " : ""}다시 연결하면 자동 백업이 이어져요.</span>`;
+    btns = `<button class="btn primary" data-gd="login">다시 연결</button><button class="btn ghost" data-gd="restore">드라이브에서 복구</button><button class="btn ghost" data-gd="off">연결 끊기</button>`;
+  } else {
+    status = `드라이브 ‘${GD_FOLDER}’ 폴더에 자동 백업 중 · 기록 ${ago(ls.get("gd-lastRec"))} · 문제 이미지 ${ago(ls.get("gd-lastFull"))}${GD.busy ? ` · <b>${GD.progress || "저장 중…"}</b>` : ""}${GD.lastErr ? ` · <span style="color:var(--omr)">${GD.lastErr}</span>` : ""}`;
+    btns = `<button class="btn" data-gd="now" ${GD.busy ? "disabled" : ""}>지금 백업</button><button class="btn ghost" data-gd="restore">드라이브에서 복구</button><button class="btn ghost" data-gd="off">연결 끊기</button>`;
+  }
+  return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px"><div style="flex:1;min-width:240px"><b>구글 드라이브 백업</b><div class="note">${status}</div></div>${btns}</div>`;
+}
+function gdBannerHtml(){
+  if (S.mode !== "local" || !GD.linked) return "";
+  const row = (msg, btn, act) => `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">${msg}</span><button class="btn" data-gd="${act}">${btn}</button></div>`;
+  if (!S.questions.size) return row("저장된 문제가 없어요. 구글 드라이브 백업에서 복구할 수 있어요.", "드라이브에서 복구", "restore");
+  if (!gdTokenOk() && (GD.pending || GD.needLogin)) return row("구글 드라이브에 아직 저장하지 못한 기록이 있어요. 연결하면 바로 저장돼요.", "드라이브 연결", "login");
+  if (GD.lastErr) return `<div class="banner">${GD.lastErr}</div>`;
+  return "";
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-gd]"); if (!b) return;
+  const act = b.dataset.gd;
+  if (act === "save"){
+    const v = ($("#gdClient") ? $("#gdClient").value : "").trim();
+    if (!/\.apps\.googleusercontent\.com$/.test(v)){ toast("클라이언트 ID는 .apps.googleusercontent.com으로 끝나야 해요."); return; }
+    GD.clientId = v; ls.set("gd-client", v); gdLogin(false, "link");
+  }
+  else if (act === "client"){ GD.clientId = ""; ls.del("gd-client"); refreshBackupUI(); }
+  else if (act === "login") gdLogin(false, GD.pending ? "flush" : null);
+  else if (act === "now") gdWrite("full");
+  else if (act === "restore"){ if (!S.questions.size || confirm("드라이브 백업으로 복구할까요? 같은 문제는 백업 내용으로 바뀌고, 기록은 합쳐져요.")) gdRestore(); }
+  else if (act === "off") gdUnlink();
+});
+
 (async function boot(){
+  const gdRet = gdParseReturn();
   let ok = await Cloud.init();
   if (ok){
     try { Store = Cloud; S.mode = "cloud"; await Cloud.load(); }
@@ -1829,7 +2030,24 @@ function renderHistory(){
   }
   $("#modeLabel").textContent = S.mode === "local" ? "이 브라우저에 저장" : "";
   if (S.mode === "local") await abInit();
+  if (S.mode === "local" && GD.linked && GD.clientId && !gdRet && !gdTokenOk() && navigator.onLine !== false
+      && (GD.pending || !S.questions.size) && Date.now() - (ls.get("gd-silent-at") || 0) > 120000){
+    ls.set("gd-silent-at", Date.now());
+    gdLogin(true, !S.questions.size ? "restore" : "flush");
+    return;
+  }
   render();
+  if (S.mode === "local" && gdRet){
+    const after = ls.get("gd-after"); ls.del("gd-after");
+    if (gdRet === "denied") toast("구글 드라이브 연결을 취소했어요.");
+    else if (gdRet === "need") toast("구글 드라이브에 다시 로그인해야 해요.");
+    else if (gdRet === "linked" || gdRet === "refreshed"){
+      if (after === "restore" || (!S.questions.size && await gdHasBackup())) { gdRestore(); return; }
+      if (gdRet === "linked") toast("구글 드라이브를 연결했어요. 첫 백업을 저장하고 있어요.");
+      gdWrite(gdRet === "linked" ? "full" : (GD.pending || "records"));
+    }
+    refreshBackupUI();
+  }
   if (S.mode === "local" && !S.questions.size && AB.dir && AB.perm === "granted" && await abHasFiles()) abRestore();
 })();
 </script>
