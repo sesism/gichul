@@ -1552,6 +1552,9 @@ async function annotatedBlob(q){
   ctx.globalCompositeOperation = "multiply"; paintStrokes(ctx, w, ih, q.note);
   return await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
 }
+const EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/bmp": "bmp" };
+async function originalBlob(q){ return q.blob || await (await fetch(Store.img(q))).blob(); }
+const origName = (q, k, blob) => annName(q, k).replace(/\.jpg$/, "." + (EXT[blob.type] || "png"));
 const annName = (q, k) => `${q.subject}_${String(q.src || q.no || (k + 1)).replace(/[\\/:*?"<>|\s]+/g, "_")}.jpg`;
 async function gdSubFolder(parent, name){
   const q = encodeURIComponent(`name='${name}' and '${parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
@@ -1577,26 +1580,32 @@ async function exportAnnotated(ids, dest, btn){
   const label = btn.textContent; btn.disabled = true;
   try{
     if (dest === "zip"){
-      const zip = new JSZip(), used = new Set();
+      const zip = new JSZip(), used = new Set(), fA = zip.folder("필기"), fO = zip.folder("원본");
       for (let k = 0; k < qs.length; k++){
         let nm = annName(qs[k], k); while (used.has(nm)) nm = nm.replace(/\.jpg$/, `_${k}.jpg`); used.add(nm);
-        zip.file(nm, await annotatedBlob(qs[k]));
+        fA.file(nm, await annotatedBlob(qs[k]));
+        const ob = await originalBlob(qs[k]);
+        fO.file(nm.replace(/\.jpg$/, "." + (EXT[ob.type] || "png")), ob);
         btn.textContent = `만드는 중 ${k + 1}/${qs.length}`;
       }
       btn.textContent = "압축하는 중…";
       const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
       const d = new Date();
       await saveFile(`필기이미지-${d.getMonth() + 1}월${d.getDate()}일-${qs.length}장.zip`, blob);
-      toast(`필기 이미지 ${qs.length}장을 저장했어요.`);
+      toast(`필기한 버전과 원본을 각각 ${qs.length}장씩 저장했어요.`);
     } else {
       if (!gdTokenOk()){ toast("드라이브 연결 시간이 지났어요. 맨 위 구글 드라이브 백업에서 다시 연결한 뒤 시도해 주세요."); refreshBackupUI(); return; }
-      const sub = await gdSubFolder(await gdFolder(), "필기 이미지");
+      const root = await gdFolder();
+      const sub = await gdSubFolder(root, "필기 이미지"), subO = await gdSubFolder(root, "원본 이미지");
       const map = Object.fromEntries((await gdList(sub)).map(f => [f.name, f.id]));
+      const mapO = Object.fromEntries((await gdList(subO)).map(f => [f.name, f.id]));
       for (let k = 0; k < qs.length; k++){
         await gdUploadFile(sub, annName(qs[k], k), await annotatedBlob(qs[k]), "image/jpeg", map);
+        const ob = await originalBlob(qs[k]), on = origName(qs[k], k, ob);
+        if (!mapO[on]) await gdUploadFile(subO, on, ob, ob.type || "image/png", mapO);
         btn.textContent = `올리는 중 ${k + 1}/${qs.length}`;
       }
-      toast(`드라이브 ‘${GD_FOLDER} › 필기 이미지’ 폴더에 ${qs.length}장을 올렸어요.`);
+      toast(`드라이브 ‘${GD_FOLDER}’ 안의 ‘필기 이미지’와 ‘원본 이미지’ 폴더에 ${qs.length}장씩 올렸어요.`);
     }
   } catch (err){
     if (err && err.status === 401){ GD.token = null; ls.del("gd-token"); toast("드라이브 연결 시간이 지났어요. 다시 연결한 뒤 시도해 주세요."); refreshBackupUI(); }
