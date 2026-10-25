@@ -109,6 +109,11 @@ html.rvmode main{padding-top:64px}
 .rvq{max-width:1000px;margin:0 auto}
 .rvimg{display:flex;justify-content:center;background:#fff}
 .rvimg img{width:auto;max-width:100%}
+.rvink{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply}
+html.rvpen .rvink{pointer-events:auto;touch-action:none;cursor:crosshair}
+.rvtools{display:flex;gap:2px;align-items:center}
+.rvtools .btn{padding:6px 10px}
+#rvPen[aria-pressed="true"]{background:var(--omr-soft);color:var(--omr)}
 .rvch{justify-content:center}
 .bub.good{background:var(--ok);border-color:var(--ok);color:#fff}
 .bub.badc{background:var(--omr);border-color:var(--omr);color:#fff;text-decoration:line-through}
@@ -553,7 +558,7 @@ function render(){
   $("#mobilebar").classList.add("hidden");
   shownResult = null;
   setInkTool(null);
-  document.documentElement.classList.remove("noscroll", "menu-open", "rvmode");
+  document.documentElement.classList.remove("noscroll", "menu-open", "rvmode", "rvpen");
   clearInterval(tick);
   ({exam: renderExamView, add: renderAdd, manage: renderManage, history: renderHistory, settings: renderSettings})[v]();
 }
@@ -1776,12 +1781,13 @@ function renderReview(){
       <div class="rvprog"><i style="width:${pct}%"></i></div>
       <span class="note">${done} / ${all.length}</span>
       <span class="note">오늘 ${okN}/${rvS.items.length}</span>
+      <span class="rvtools"><button class="btn ghost" id="rvPen" aria-pressed="${RVI.on}" title="빨간 펜 (P)"><span class="sw" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#E0283C;margin-right:6px"></span>펜</button><button class="btn ghost" id="rvUndo" title="되돌리기 (Z)" aria-label="되돌리기">↶</button><button class="btn ghost" id="rvClear" title="필기 지우기" aria-label="필기 지우기">지우기</button></span>
       <button class="btn" id="rvStop">그만하기</button>
     </div>
     <div class="rvq">
       <div class="qtop">${q.no ? `<span class="qnum">${h(q.no)}</span>` : ""}<span class="qtag">${h(q.tag || "")}</span>
         ${ans ? "" : `<button class="flag" id="rvFlag" aria-pressed="${!!rvS.flag}">헷갈림</button>`}</div>
-      <div class="qimg rvimg"><img id="rvImg" src="${h(Store.img(q))}" alt="문제">${ans && q.note && q.note.length ? `<canvas class="qnote" data-note="${q.id}"></canvas>` : ""}</div>
+      <div class="qimg rvimg"><img id="rvImg" src="${h(Store.img(q))}" alt="문제">${ans && q.note && q.note.length ? `<canvas class="qnote" data-note="${q.id}"></canvas>` : ""}<canvas class="rvink" id="rvInk"></canvas></div>
       <div class="choices rvch">${Array.from({ length: q.choices || S.settings.choices }, (_, c) => {
         const n = c + 1, cls = ans ? (acc.includes(n) ? " good" : ans.mine === n ? " badc" : "") : "";
         return `<button class="bub${cls}" data-rvc="${n}" ${ans ? "disabled" : ""} aria-label="${n}번">${n}</button>`; }).join("")}</div>
@@ -1793,6 +1799,10 @@ function renderReview(){
   const fit = () => { const t = img.getBoundingClientRect().top + window.scrollY; img.style.maxHeight = Math.max(200, window.innerHeight - t - 120) + "px"; };
   img.onload = fit; fit();
   setupNoteCanvases();
+  rvInkSetup();
+  $("#rvPen").onclick = () => rvPenToggle();
+  $("#rvUndo").onclick = () => { RVI.strokes.pop(); rvInkPaint(); };
+  $("#rvClear").onclick = () => { RVI.strokes = []; rvInkPaint(); };
   $("#rvStop").onclick = rvEnd;
   if ($("#rvFlag")) $("#rvFlag").onclick = () => { rvS.flag = !rvS.flag; rvSave(); $("#rvFlag").setAttribute("aria-pressed", rvS.flag); };
   if ($("#rvNext")) { $("#rvNext").onclick = rvNextQ; }
@@ -1812,7 +1822,33 @@ async function rvAnswer(c){
   Store.saveSettings().catch(() => {});
   if (rvS && rvS.items.length % 10 === 0) abWrite("records");
 }
-function rvNextQ(){ if (!rvS || !rvS.answered) return; rvS.answered = null; rvS.flag = false; rvS.curId = null; rvSave(); renderReview(); window.scrollTo(0, 0); }
+const RVI = { on: !!ls.get("gm-rvpen"), strokes: [] };
+function rvInkPaint(){ const cv = $("#rvInk"); if (cv) fitAndPaint(cv, RVI.strokes); }
+function rvPenToggle(){ RVI.on = !RVI.on; ls.set("gm-rvpen", RVI.on); document.documentElement.classList.toggle("rvpen", RVI.on); const b = $("#rvPen"); if (b) b.setAttribute("aria-pressed", RVI.on); }
+function rvInkSetup(){
+  const cv = $("#rvInk"); if (!cv) return;
+  document.documentElement.classList.toggle("rvpen", RVI.on);
+  new ResizeObserver(rvInkPaint).observe(cv.parentElement);
+  let cur = null;
+  const at = (ev, r) => ({ x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height });
+  cv.addEventListener("pointerdown", e => {
+    if (!RVI.on || e.button > 0) return;
+    if (e.pointerType === "pen" && !penOnly){ penOnly = true; ls.set("gm-penonly", true); }
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    if (penOnly && e.pointerType === "touch"){ cur = { pan: true, y: e.clientY }; return; }
+    cur = newStroke("red", at(e, cv.getBoundingClientRect()), e); RVI.strokes.push(cur); rvInkPaint();
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!cur) return;
+    if (cur.pan){ window.scrollBy(0, cur.y - e.clientY); cur.y = e.clientY; return; }
+    const r = cv.getBoundingClientRect(), evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of evs.length ? evs : [e]) pushPoint(cur, at(ev, r), ev);
+    paintTail(cv.getContext("2d"), cv.width, cv.height, cur, cur.drawn || 1); cur.drawn = cur.p.length / 2;
+  });
+  const end = () => { if (!cur) return; const was = cur; cur = null; if (!was.pan){ delete was.drawn; rvInkPaint(); } };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+}
+function rvNextQ(){ if (!rvS || !rvS.answered) return; RVI.strokes = []; rvS.answered = null; rvS.flag = false; rvS.curId = null; rvSave(); renderReview(); window.scrollTo(0, 0); }
 function renderCycleDone(all){
   const R = rvState(rvS.subject), cyc = R.cycle;
   const qs = [...S.questions.values()].filter(q => q.subject === rvS.subject);
@@ -1875,6 +1911,8 @@ document.addEventListener("keydown", e => {
   if (n >= 1 && n <= 5 && !rvS.answered){ e.preventDefault(); rvAnswer(n); }
   else if ((e.key === "Enter" || e.key === "ArrowRight" || e.key === " ") && rvS.answered){ e.preventDefault(); rvNextQ(); }
   else if ((e.key === "f" || e.key === "F") && !rvS.answered && $("#rvFlag")){ e.preventDefault(); $("#rvFlag").click(); }
+  else if (e.key === "p" || e.key === "P"){ e.preventDefault(); rvPenToggle(); }
+  else if (e.key === "z" || e.key === "Z"){ e.preventDefault(); RVI.strokes.pop(); rvInkPaint(); }
 });
 
 /* ---------- excel import ---------- */
