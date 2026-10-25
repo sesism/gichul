@@ -210,7 +210,7 @@ body.drawing.erasing .ink{cursor:cell}
 .expl-wrap summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--ink-2)}
 .expl{white-space:pre-wrap;font-size:14px;line-height:1.75;color:var(--ink-2);margin-top:6px;max-width:72ch}
 #zoomExpl{padding:12px 16px 16px;margin:0;border-top:1px solid var(--line)}
-#zoomExpl:empty{display:none}
+#zoomExpl:empty,#zoomExpl[hidden]{display:none}
 
 /* add */
 .drop{border:1.5px dashed var(--omr-line);border-radius:12px;padding:36px 20px;text-align:center;background:var(--sheet);cursor:pointer}
@@ -221,6 +221,8 @@ body.drawing.erasing .ink{cursor:cell}
 .pcard.missing{border-color:var(--warn)}
 .pthumb{height:120px;background:#fff;border-radius:6px;overflow:hidden;border:1px solid var(--line);cursor:zoom-in}
 .pthumb img{width:100%;height:100%;object-fit:cover;object-position:top}
+.pthumb .tw{position:relative}
+.pthumb .tw img{height:auto;object-fit:fill;display:block}
 .pname{font-size:12px;color:var(--pencil);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mini{display:flex;gap:5px}
 .mini .bub{width:30px;height:30px;font-size:13px}
@@ -333,7 +335,7 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
   <button class="btn" id="mSubmit">제출</button>
 </div>
 
-<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><button class="btn" id="zNote">필기하기</button><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><div style="position:relative"><img id="zoomImg" alt=""><div id="zPad" class="padarea"></div><canvas class="qnote" id="zNoteCv"></canvas></div></div><div id="zoomExpl" class="expl"></div></dialog>
+<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><button class="btn ghost" id="zExplBtn">해설 보기</button><button class="btn" id="zNote">필기하기</button><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><div style="position:relative"><img id="zoomImg" alt=""><div id="zPad" class="padarea"></div><canvas class="qnote" id="zNoteCv"></canvas></div></div><div id="zoomExpl" class="expl"></div></dialog>
 <dialog id="noteEd" class="noteed" aria-label="문제 필기">
   <div class="ne-bar">
     <div class="ne-tools">
@@ -958,9 +960,11 @@ function renderResult(r = lastResult, back = null){
 }
 
 let zoomList = [], zoomPos = -1;
+let zoomShowExpl = true;
 function zoom(id){
   zoomList = [...new Set([...document.querySelectorAll("#app [data-zoom]")].map(el => el.dataset.zoom))];
   zoomPos = zoomList.indexOf(id);
+  zoomShowExpl = currentView() !== "manage";
   showZoom(id);
   if (!$("#zoom").open) $("#zoom").showModal();
 }
@@ -973,11 +977,14 @@ function showZoom(id){
   $("#zoom").dataset.id = id; $("#zNote").hidden = false;
   const zi = $("#zoomImg"), zc = $("#zNoteCv");
   zc.getContext("2d").clearRect(0, 0, zc.width, zc.height);
-  const zpad = showNotes() && q.note && q.note.length ? (q.notePad || 0) : 0;
+  const withNotes = currentView() === "manage" || showNotes();
+  const zpad = withNotes && q.note && q.note.length ? (q.notePad || 0) : 0;
   $("#zPad").style.paddingTop = (zpad * 100) + "%";
-  const zpaint = () => requestAnimationFrame(() => fitAndPaint(zc, showNotes() ? q.note : null, zi.getBoundingClientRect().height));
+  const zpaint = () => requestAnimationFrame(() => fitAndPaint(zc, withNotes ? q.note : null, zi.getBoundingClientRect().height));
   zi.onload = zpaint;
   zi.src = Store.img(q); $("#zoomExpl").textContent = q.expl || "";
+  $("#zoomExpl").hidden = !zoomShowExpl;
+  $("#zExplBtn").hidden = !q.expl; $("#zExplBtn").textContent = zoomShowExpl ? "해설 숨기기" : "해설 보기";
   if (zi.complete) zpaint();
   $("#zNote").textContent = q.note && q.note.length ? "필기 고치기" : "필기하기";
   $("#zPrev").hidden = $("#zNext").hidden = zoomList.length < 2;
@@ -987,6 +994,7 @@ function showZoom(id){
 }
 function zoomStep(d){ const j = zoomPos + d; if (j < 0 || j >= zoomList.length) return; zoomPos = j; showZoom(zoomList[j]); }
 $("#zPrev").onclick = () => zoomStep(-1);
+$("#zExplBtn").onclick = () => { zoomShowExpl = !zoomShowExpl; $("#zoomExpl").hidden = !zoomShowExpl; $("#zExplBtn").textContent = zoomShowExpl ? "해설 숨기기" : "해설 보기"; };
 $("#zNote").onclick = () => { const id = zoomList[zoomPos] || null; const cur = id || $("#zoom").dataset.id; if (cur) openNoteEditor(cur, zoomList.length ? zoomList : [cur]); };
 $("#zNext").onclick = () => zoomStep(1);
 $("#zoom").addEventListener("keydown", e => {
@@ -1090,7 +1098,7 @@ function renderAdd(){
     const rm = e.target.closest("[data-rm]");
     if (rm){ const [p] = pending.splice(+rm.dataset.rm, 1); URL.revokeObjectURL(p.url); renderAdd(); return; }
     const pz = e.target.closest("[data-pz]");
-    if (pz){ const p = pending[+pz.dataset.pz]; $("#zoomImg").src = p.url; $("#zoomTitle").textContent = p.name; $("#zoomExpl").textContent = ""; $("#zNote").hidden = true; $("#zPad").style.paddingTop = "0%"; { const zc = $("#zNoteCv"); zc.getContext("2d").clearRect(0, 0, zc.width, zc.height); } zoomList = []; $("#zoomPos").textContent = ""; $("#zPrev").hidden = $("#zNext").hidden = true; $("#zoom").showModal(); }
+    if (pz){ const p = pending[+pz.dataset.pz]; $("#zoomImg").src = p.url; $("#zoomTitle").textContent = p.name; $("#zoomExpl").textContent = ""; $("#zNote").hidden = true; $("#zExplBtn").hidden = true; $("#zPad").style.paddingTop = "0%"; { const zc = $("#zNoteCv"); zc.getContext("2d").clearRect(0, 0, zc.width, zc.height); } zoomList = []; $("#zoomPos").textContent = ""; $("#zPrev").hidden = $("#zNext").hidden = true; $("#zoom").showModal(); }
   };
   $("#clear").onclick = () => { pending.forEach(p => URL.revokeObjectURL(p.url)); pending = []; renderAdd(); };
   $("#save").onclick = savePending;
@@ -1215,7 +1223,7 @@ function renderManage(){
       const r = rate(q);
       return `<div class="mcard" data-id="${q.id}">
         <label class="check" style="font-size:13px;margin:-2px 0 0"><input type="checkbox" data-pick="${q.id}" ${selected.has(q.id) ? "checked" : ""}><span>선택</span></label>
-        <div class="pthumb" data-zoom="${q.id}"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>
+        <div class="pthumb" data-zoom="${q.id}"><div class="tw"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy">${q.note && q.note.length ? `<canvas class="qnote" data-note="${q.id}"></canvas>` : ""}</div></div>
         <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span></div>
         <div class="mrow"><span>정답 <select data-ans="${q.id}">${Array.from({length: q.choices || st.choices}, (_, c) => `<option value="${c+1}" ${q.answer===c+1?"selected":""}>${CIRC[c]}</option>`).join("")}</select></span>
           ${answersOf(q).length > 1 ? `<span class="note">${q.noAnswer ? "정답 없음" : "복수정답 " + ansLabel(q)}</span>` : ""}<span class="rate${r >= 0.5 ? " hi" : ""}">${q.n ? `${q.n}회 중 ${q.w}회 틀림` : "안 푼 문제"}</span></div>
@@ -1267,6 +1275,7 @@ function renderManage(){
       }
     };
   }
+  setupNoteCanvases();
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
     if (e.target.closest("[data-pick], label.check")) return;
