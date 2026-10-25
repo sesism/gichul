@@ -101,6 +101,10 @@ textarea{resize:vertical;min-height:72px;font-family:var(--sans);letter-spacing:
 .qimg{position:relative}
 .one #qs .q{display:none}
 .one #qs .q.current{display:block}
+html.noscroll,html.noscroll body{overflow:hidden;overscroll-behavior:none;height:100%}
+.one #qs .q{margin-bottom:0}
+.one #qs .q.current .qimg{display:flex;justify-content:center}
+.one #qs .qimg img{width:auto;max-width:100%;max-height:var(--qmax,65vh)}
 .qnav{position:fixed;top:50%;transform:translateY(-50%);width:56px;height:56px;border-radius:50%;border:1px solid var(--line);background:var(--sheet);color:var(--ink);font-size:34px;line-height:1;display:grid;place-items:center;padding:0 0 4px;z-index:7;box-shadow:0 6px 20px rgba(0,0,0,.14)}
 .qnav:hover:not(:disabled){background:var(--omr);border-color:var(--omr);color:#fff}
 .qnav:disabled{opacity:.3;cursor:default}
@@ -462,6 +466,7 @@ function render(){
   $("#mobilebar").classList.add("hidden");
   shownResult = null;
   setInkTool(null);
+  document.documentElement.classList.remove("noscroll");
   clearInterval(tick);
   ({exam: renderExamView, add: renderAdd, manage: renderManage, history: renderHistory})[v]();
 }
@@ -539,8 +544,7 @@ function goQ(i){
   if (!exam) return;
   i = Math.max(0, Math.min(exam.ids.length - 1, i));
   setCurrent(i);
-  if (viewOne()) { const top = $("#qs"); if (top && top.getBoundingClientRect().top < 0) top.scrollIntoView({block:"start"}); }
-  else { const el = $("#q-" + i); if (el) el.scrollIntoView({behavior:"smooth", block:"start"}); }
+  if (!viewOne()) { const el = $("#q-" + i); if (el) el.scrollIntoView({behavior:"smooth", block:"start"}); }
 }
 function renderExam(){
   exam.ids = exam.ids.filter(id => S.questions.has(id));
@@ -619,8 +623,9 @@ function renderExam(){
   if (viewOne()){
     $("#qPrev").onclick = () => goQ(curIdx - 1);
     $("#qNext").onclick = () => goQ(curIdx + 1);
-    document.querySelectorAll("#qs img").forEach(im => im.loading = "eager");
-  }
+    document.querySelectorAll("#qs img").forEach(im => { im.loading = "eager"; im.addEventListener("load", () => fitOne()); });
+    document.documentElement.classList.add("noscroll"); window.scrollTo(0, 0);
+  } else document.documentElement.classList.remove("noscroll");
   const io = new IntersectionObserver(ents => {
     if (exam.paper || viewOne()) return;
     ents.forEach(en => { if (en.isIntersecting && en.intersectionRatio > 0.35) setCurrent(+en.target.dataset.i); });
@@ -724,7 +729,19 @@ function setCurrent(i){
   if ($("#qPrev")) { $("#qPrev").disabled = i <= 0; $("#qNext").disabled = i >= exam.ids.length - 1; }
   document.querySelectorAll(".orow .n").forEach(n => n.style.textDecoration = "");
   const on = $(`#o-${i} .n`); if (on && viewOne()) on.style.textDecoration = "underline";
+  if (viewOne()) requestAnimationFrame(fitOne);
 }
+function fitOne(){
+  if (!exam || exam.done || !viewOne() || currentView() !== "exam") return;
+  const q = $("#q-" + curIdx); if (!q) return;
+  const img = $(".qimg img", q), ch = $(".choices", q); if (!img || !ch) return;
+  if (window.scrollY) window.scrollTo(0, 0);
+  const mb = $("#mobilebar"), mbH = mb && getComputedStyle(mb).display !== "none" && !mb.classList.contains("hidden") ? mb.offsetHeight : 0;
+  const reserve = ch.offsetHeight + 14 + 14 + 16 + mbH;
+  const avail = window.innerHeight - img.getBoundingClientRect().top - reserve;
+  document.documentElement.style.setProperty("--qmax", Math.max(160, Math.floor(avail)) + "px");
+}
+window.addEventListener("resize", () => fitOne());
 function moveTo(i){
   i = Math.max(0, Math.min(exam.ids.length - 1, i));
   setCurrent(i);
