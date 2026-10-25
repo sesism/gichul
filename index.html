@@ -105,6 +105,28 @@ html.noscroll,html.noscroll body{overflow:hidden;overscroll-behavior:none;height
 .one #qs .q{margin-bottom:0}
 .one #qs .q.current .qimg{display:flex;justify-content:center}
 .one #qs .qimg img{width:auto;max-width:100%;max-height:var(--qmax,65vh)}
+/* focus layout for one-question mode */
+.focusbar{display:none}
+html.noscroll .focusbar{display:flex;position:fixed;top:0;left:0;right:0;z-index:9;height:calc(48px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 10px 0;align-items:center;gap:8px;background:var(--sheet);border-bottom:1px solid var(--line)}
+.fb-mid{flex:1;text-align:center;font-size:14px;white-space:nowrap;overflow:hidden}
+.fb-mid b{font-family:var(--serif);font-size:19px;color:var(--omr)}
+.fb-timer{font-variant-numeric:tabular-nums;font-weight:600;margin:0 10px}
+.fb-timer.over{color:var(--omr)}
+.fb-right{display:flex;gap:6px;align-items:center}
+.fb-right .btn{padding:6px 12px}
+html.noscroll header,html.noscroll .omr,html.noscroll #mobilebar,html.noscroll .exam-head,html.noscroll .keyhelp{display:none !important}
+html.noscroll.menu-open .exam-head{display:block !important;position:fixed;top:calc(54px + env(safe-area-inset-top,0px));right:10px;z-index:12;background:var(--sheet);border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.2);max-width:min(440px,94vw)}
+html.noscroll.menu-open .exam-head h1{font-size:18px;margin-bottom:2px}
+html.noscroll.menu-open .exam-head .tools{margin-top:10px}
+html.noscroll main{max-width:none;padding:58px 8px 8px}
+html.noscroll .exam{display:block}
+html.noscroll #qs .q{border:0;background:none;padding:0}
+html.noscroll .qtop{margin-bottom:4px}
+html.noscroll .qtag{display:none}
+html.noscroll .choices{justify-content:center;margin-top:10px}
+html.noscroll .inkbar{position:fixed;top:calc(5px + env(safe-area-inset-top,0px));bottom:auto;left:6px;z-index:11;box-shadow:none;border:0;background:none;padding:0}
+html.noscroll .inkbar button{width:36px;height:36px}
+html.noscroll .qnav{width:44px;height:44px;font-size:28px;opacity:.85}
 .qnav{position:fixed;top:50%;transform:translateY(-50%);width:56px;height:56px;border-radius:50%;border:1px solid var(--line);background:var(--sheet);color:var(--ink);font-size:34px;line-height:1;display:grid;place-items:center;padding:0 0 4px;z-index:7;box-shadow:0 6px 20px rgba(0,0,0,.14)}
 .qnav:hover:not(:disabled){background:var(--omr);border-color:var(--omr);color:#fff}
 .qnav:disabled{opacity:.3;cursor:default}
@@ -466,7 +488,7 @@ function render(){
   $("#mobilebar").classList.add("hidden");
   shownResult = null;
   setInkTool(null);
-  document.documentElement.classList.remove("noscroll");
+  document.documentElement.classList.remove("noscroll", "menu-open");
   clearInterval(tick);
   ({exam: renderExamView, add: renderAdd, manage: renderManage, history: renderHistory})[v]();
 }
@@ -596,7 +618,9 @@ function renderExam(){
       <button data-act="undo" title="되돌리기 (Z)" aria-label="되돌리기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
       <button data-act="clear" title="이 문제 필기 모두 지우기" aria-label="이 문제 필기 지우기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
     </div>`}
-    ${viewOne() ? `<button class="qnav prev" id="qPrev" aria-label="이전 문제">‹</button><button class="qnav next" id="qNext" aria-label="다음 문제">›</button>` : ""}`;
+    ${viewOne() ? `<button class="qnav prev" id="qPrev" aria-label="이전 문제">‹</button><button class="qnav next" id="qNext" aria-label="다음 문제">›</button>
+    <div class="focusbar"><div class="fb-mid"><b id="fbPos">1</b><span class="note"> / ${exam.ids.length}</span><span class="fb-timer" id="fbTimer">00:00</span><span class="note" id="fbProg"></span></div>
+      <div class="fb-right"><button class="btn ghost" id="fbMenu" aria-label="메뉴" aria-expanded="false">메뉴</button><button class="btn primary" id="fbSubmit">제출</button></div></div>` : ""}`;
   $("#mobilebar").classList.remove("hidden");
 
   const app = $("#app");
@@ -625,6 +649,9 @@ function renderExam(){
     $("#qNext").onclick = () => goQ(curIdx + 1);
     document.querySelectorAll("#qs img").forEach(im => { im.loading = "eager"; im.addEventListener("load", () => fitOne()); });
     document.documentElement.classList.add("noscroll"); window.scrollTo(0, 0);
+    $("#fbSubmit").onclick = submitExam;
+    $("#fbMenu").onclick = e => { e.stopPropagation(); const open = document.documentElement.classList.toggle("menu-open"); e.currentTarget.setAttribute("aria-expanded", open); };
+    $(".exam-head").addEventListener("click", e => { if (e.target.closest("button")) setTimeout(() => document.documentElement.classList.remove("menu-open"), 0); });
   } else document.documentElement.classList.remove("noscroll");
   const io = new IntersectionObserver(ents => {
     if (exam.paper || viewOne()) return;
@@ -638,7 +665,7 @@ function renderExam(){
     if (!exam || exam.done) return;
     const elapsed = Math.max(0, (Date.now() - exam.startAt) / 1000);
     const over = elapsed > exam.limitSec;
-    [$("#timer"), $("#mTimer")].forEach(t => { if (t){ t.textContent = fmt(elapsed); t.classList.toggle("over", over); } });
+    [$("#timer"), $("#mTimer"), $("#fbTimer")].forEach(t => { if (t){ t.textContent = fmt(elapsed); t.classList.toggle("over", over); } });
     if (over && !exam.warned){ exam.warned = true; ls.set("gm-exam", exam); toast("제한 시간이 지났어요. 초과 시간도 기록돼요."); }
   };
   upd(); tick = setInterval(upd, 500);
@@ -726,6 +753,7 @@ function setCurrent(i){
   document.querySelectorAll(".q.current").forEach(x => x.classList.remove("current"));
   const el = $("#q-" + i); if (el) el.classList.add("current");
   if ($("#qPos")) $("#qPos").textContent = `${i+1}번`;
+  if ($("#fbPos")) $("#fbPos").textContent = i + 1;
   if ($("#qPrev")) { $("#qPrev").disabled = i <= 0; $("#qNext").disabled = i >= exam.ids.length - 1; }
   document.querySelectorAll(".orow .n").forEach(n => n.style.textDecoration = "");
   const on = $(`#o-${i} .n`); if (on && viewOne()) on.style.textDecoration = "underline";
@@ -742,6 +770,7 @@ function fitOne(){
   document.documentElement.style.setProperty("--qmax", Math.max(160, Math.floor(avail)) + "px");
 }
 window.addEventListener("resize", () => fitOne());
+document.addEventListener("click", e => { if (document.documentElement.classList.contains("menu-open") && !e.target.closest(".exam-head,#fbMenu")) document.documentElement.classList.remove("menu-open"); });
 function moveTo(i){
   i = Math.max(0, Math.min(exam.ids.length - 1, i));
   setCurrent(i);
@@ -776,6 +805,7 @@ function updateProgress(){
   const txt = `${n} / ${t} 표기`;
   if ($("#prog")) $("#prog").textContent = txt;
   $("#mProg").textContent = txt;
+  if ($("#fbProg")) $("#fbProg").textContent = `표기 ${n}/${t}`;
 }
 document.addEventListener("keydown", e => {
   if (currentView() !== "exam" || !exam || exam.done) return;
