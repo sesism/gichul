@@ -876,11 +876,11 @@ function renderAdd(){
           <select id="xSubj">${st.subjects.map(s => `<option ${s===(xImp.subject||addSubject)?"selected":""}>${h(s)}</option>`).join("")}</select></div>
         <div class="field"><span class="lab">엑셀 파일</span>
           <div><button class="btn" id="xPick">${xImp.rows ? h(xImp.fileName) : "엑셀 선택"}</button></div>
-          <input type="file" id="xFile" accept=".xlsx,.xls,.csv" class="hidden"></div>
+          <input type="file" id="xFile" accept=".xlsx,.xls,.csv,.zip" class="hidden"></div>
       </div>
       <div class="field"><span class="lab">문제 이미지</span>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn" id="iPickDir">이미지 폴더 선택</button><button class="btn" id="iPick">이미지 파일 선택</button><button class="btn" id="zPick">압축 파일(zip) 선택</button><span class="note">${xImp.images.size ? `이미지 ${xImp.images.size}장 선택됨` : ""}</span></div>
-        <input type="file" id="iDir" webkitdirectory multiple class="hidden"><input type="file" id="zFile" accept=".zip,application/zip,application/x-zip-compressed" multiple class="hidden"><input type="file" id="iFiles" accept="image/*" multiple class="hidden"></div>
+        <input type="file" id="iDir" webkitdirectory multiple class="hidden"><input type="file" id="zFile" multiple class="hidden"><input type="file" id="iFiles" accept="image/*" multiple class="hidden"></div>
       <div id="xSummary">${importSummaryHtml()}</div>
       <div><button class="btn primary" id="xGo" ${importPlan().ready.length ? "" : "disabled"}>${importPlan().ready.length ? `${importPlan().ready.length}문제 등록` : "등록"}</button></div>
       <div class="progress hidden" id="xbar"><i></i></div>
@@ -929,7 +929,7 @@ function renderAdd(){
   $("#chs").onchange = e => { st.choices = +e.target.value; Store.saveSettings().catch(()=>{}); renderAdd(); };
   $("#xSubj").onchange = e => { xImp.subject = e.target.value; };
   $("#xPick").onclick = () => $("#xFile").click();
-  $("#xFile").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (f) await loadSheet(f); };
+  $("#xFile").onchange = async e => { const f = e.target.files[0]; e.target.value = ""; if (!f) return; if (/\.zip$/i.test(f.name)) await loadZips([f]); else await loadSheet(f); };
   $("#iPickDir").onclick = () => $("#iDir").click();
   $("#iPick").onclick = () => $("#iFiles").click();
   $("#iDir").onchange = $("#iFiles").onchange = e => { addImportImages(e.target.files); e.target.value = ""; };
