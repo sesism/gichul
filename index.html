@@ -152,7 +152,7 @@ dialog.noteed[open]{display:flex}
 #neExpl{max-width:1000px;margin:14px auto 0}
 .padarea{background:#fff;background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 31px,#eef0f3 31px,#eef0f3 32px);border-top:1px dashed #d5d8de}
 .padarea[style*="padding-top: 0"],.padarea:not([style]){border-top:0}
-#neExpl:empty{display:none}
+#neExpl:empty,#neExpl[hidden]{display:none}
 body.drawing .ink{pointer-events:auto;touch-action:none;cursor:crosshair}
 body.drawing.erasing .ink{cursor:cell}
 .inkbar{position:fixed;left:20px;bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:8;display:flex;align-items:center;gap:2px;background:var(--sheet);border:1px solid var(--line);border-radius:12px;padding:5px;box-shadow:0 6px 20px rgba(0,0,0,.14)}
@@ -350,6 +350,7 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
     <button class="btn ghost" data-nact="padminus" id="nePadMinus" title="아래 여백 줄이기">여백 −</button>
     <span class="ne-title" id="neTitle"></span>
     <span style="flex:1"></span>
+    <button class="btn ghost" data-nact="expl" id="neExplBtn">해설 보기</button>
     <span class="note" id="neSaved"></span>
     <button class="btn ghost" data-nact="prev" id="nePrev" aria-label="이전 문제">‹</button>
     <span class="note" id="nePos"></span>
@@ -1422,7 +1423,7 @@ function neSetPad(v){ NE.pad = Math.max(0, Math.round(v * 10) / 10); $("#nePad")
 function openNoteEditor(id, list){
   NE.list = list && list.length ? list : [id];
   NE.pos = Math.max(0, NE.list.indexOf(id));
-  NE.anyChange = false;
+  NE.anyChange = false; NE.showExpl = false;
   const d = $("#noteEd");
   if (!d.open) d.showModal();
   neSetTool(NE.tool || "red");
@@ -1437,6 +1438,8 @@ function neLoad(id){
   $("#nePrev").disabled = NE.pos <= 0; $("#neNext").disabled = NE.pos >= NE.list.length - 1;
   $("#nePrev").hidden = $("#neNext").hidden = NE.list.length < 2;
   $("#neExpl").textContent = q.expl || "";
+  $("#neExpl").hidden = !NE.showExpl;
+  $("#neExplBtn").hidden = !q.expl; $("#neExplBtn").textContent = NE.showExpl ? "해설 숨기기" : "해설 보기";
   $("#neSaved").textContent = "";
   const img = $("#neImg");
   img.onload = () => neFit();
@@ -1508,6 +1511,7 @@ async function neClose(){
       if (lost && !confirm("줄이는 여백에 필기가 있어요. 그 필기는 안 보이게 돼요. 줄일까요?")) return;
       neSetPad(newPad); neQueueSave();
     }
+    else if (act === "expl"){ NE.showExpl = !NE.showExpl; $("#neExpl").hidden = !NE.showExpl; a.textContent = NE.showExpl ? "해설 숨기기" : "해설 보기"; }
     else if (act === "prev") neStep(-1);
     else if (act === "next") neStep(1);
     else if (act === "close") neClose();
