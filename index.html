@@ -1401,7 +1401,8 @@ function renderNote(){
   if (!cardsOrder.includes(id)) cardsOrder = cardsPool("all", "all").map(x => x.id);
   const pos = cardsOrder.indexOf(id);
   const note = q.note || {};
-  noteEd = { id, strokes: (note.s || []).slice(), pad: note.pad != null ? note.pad : DEFAULT_PAD, undo: [], redo: [], dirty: false, timer: null, touched: false };
+  const lastPad = ls.get("gm-notepad");
+  noteEd = { id, strokes: (note.s || []).slice(), pad: hasInk(q) && note.pad != null ? note.pad : (typeof lastPad === "number" ? lastPad : DEFAULT_PAD), undo: [], redo: [], dirty: false, timer: null, touched: false };
   $("#app").innerHTML = `
     <div class="nhead">
       <a class="btn ghost" href="#cards">‹ 목록</a>
@@ -1441,7 +1442,7 @@ function renderNote(){
     const b = e.target.closest("[data-pad]"); if (!b) return;
     const v = +b.dataset.pad, maxY = noteMaxY(), r = noteImgRatio();
     if (r && maxY > r + v + 0.002){ toast("여백 아래쪽에 쓴 필기가 있어서 더 줄일 수 없어요."); return; }
-    noteEd.pad = v; $("#nPadBox").style.paddingTop = (v * 100) + "%"; $("#nPadBox").classList.toggle("zero", !v);
+    noteEd.pad = v; ls.set("gm-notepad", v); $("#nPadBox").style.paddingTop = (v * 100) + "%"; $("#nPadBox").classList.toggle("zero", !v);
     $("#nPad").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
     noteChanged();
   };
@@ -1591,24 +1592,26 @@ async function exportAnki(opt){
     btn.textContent = "준비 중…";
     let SQL;
     try { SQL = await loadSql(); } catch { toast("안키 파일 만드는 도구를 불러오지 못했어요. 인터넷에 연결한 뒤 다시 시도하세요."); throw { code: "silent" }; }
-    const notes = [], media = [], sec = Math.floor(Date.now() / 1000);
+    const notes = [], media = [], sec = Math.floor(Date.now() / 1000), used = new Set();
+    const uniq = n => { let x = n, k = 2; while (used.has(x)) x = n.replace(/(\.[^.]+)$/, `_${k++}$1`); used.add(x); return x; };
     for (let i = 0; i < qs.length; i++){
       const q = qs[i];
       btn.textContent = `카드 만드는 중 ${i + 1} / ${qs.length}`; bar.firstElementChild.style.width = ((i + 1) / qs.length * 100) + "%";
       const front = await renderCardImage(q, false);
-      const fName = `gichul_${q.id}_q_${crc32(front).toString(16)}.jpg`;
+      const base = qFileName(q).replace(/\.[^.]+$/, "").normalize("NFC").replace(/[\\/:*?"<>|#%\[\]]+/g, "_").trim();
+      const fName = base ? uniq(base + ".jpg") : `gichul_${q.id}_q_${crc32(front).toString(16)}.jpg`;
       media.push({ name: fName, data: front });
       let bName = fName;
       if (hasInk(q)){
         const back = await renderCardImage(q, true);
-        bName = `gichul_${q.id}_a_${crc32(back).toString(16)}.jpg`;
+        bName = base ? uniq(base + "_풀이.jpg") : `gichul_${q.id}_a_${crc32(back).toString(16)}.jpg`;
         media.push({ name: bName, data: back });
       }
       const src = q.subject + (q.tag ? " · " + q.tag : "");
       notes.push({
         guid: "gichul-" + q.id,
         deck: opt.split ? `${opt.deck}::${q.subject}` : opt.deck,
-        fields: [`<img src="${fName}">`, `<img src="${bName}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
+        fields: [`<img src="${h(fName)}">`, `<img src="${h(bName)}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
         tags: ["기출", String(q.subject).replace(/\s+/g, "_")],
         sort: fName,
         mod: Math.floor(Math.max((q.note && q.note.at) || 0, q.createdAt || 0, q.imgAt || 0) / 1000) || sec
