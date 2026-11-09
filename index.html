@@ -257,6 +257,14 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
   .qimg{border:0;border-radius:0}
 }
 @media print{.inkbar,.ink{display:none !important}}
+/* settings */
+.slist{list-style:none;margin:0;padding:0}
+.srow{display:flex;align-items:center;gap:6px 12px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.sname{font-weight:600;font-size:16px}
+.sact{margin-left:auto;display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end}
+.sact .btn{padding:6px 10px}
+.sadd{display:flex;gap:8px;margin-top:16px}
+.sadd input{flex:1}
 /* anki cards */
 a.mcard{color:inherit;text-decoration:none}
 a.btn{text-decoration:none;display:inline-block}
@@ -291,6 +299,7 @@ body.ndraw.erasing #nLive{cursor:cell}
       <a href="#manage" data-view="manage">문제 관리</a>
       <a href="#cards" data-view="cards">안키 카드</a>
       <a href="#history" data-view="history">기록</a>
+      <a href="#settings" data-view="settings">설정</a>
     </nav>
   </div>
 </header>
@@ -451,7 +460,7 @@ let manageFilter = { subject:"all", kind:"all", sort:"new" };
 let tick = null;
 
 /* ---------- routing ---------- */
-const VIEWS = ["exam","add","manage","cards","history"];
+const VIEWS = ["exam","add","manage","cards","history","settings"];
 function currentView(){ const v = location.hash.slice(1); if (v.startsWith("note-")) return "note"; return VIEWS.includes(v) ? v : "exam"; }
 window.addEventListener("hashchange", render);
 function render(){
@@ -463,7 +472,7 @@ function render(){
   shownResult = null;
   setInkTool(null);
   clearInterval(tick);
-  ({exam: renderExamView, add: renderAdd, manage: renderManage, cards: renderCards, note: renderNote, history: renderHistory})[v]();
+  ({exam: renderExamView, add: renderAdd, manage: renderManage, cards: renderCards, note: renderNote, history: renderHistory, settings: renderSettings})[v]();
 }
 
 /* ---------- exam view ---------- */
@@ -924,7 +933,7 @@ function renderAdd(){
     <h2>설정</h2>
     <div class="panel grid2">
       <div class="field"><label for="chs">선지 개수</label><select id="chs"><option ${st.choices==4?"selected":""}>4</option><option ${st.choices==5?"selected":""}>5</option></select></div>
-      <div class="field"><span class="lab">과목 목록</span><div class="note">${st.subjects.map(h).join(", ")}</div></div>
+      <div class="field"><span class="lab">과목 목록</span><div class="note">${st.subjects.map(h).join(", ")} · <a href="#settings">설정에서 바꾸기</a></div></div>
     </div>`;
 
   $("#subj").onchange = e => {
@@ -1894,6 +1903,111 @@ document.addEventListener("click", e => {
   if (b.dataset.act === "allow") abAllow();
   else if (b.dataset.act === "restore") abRestore();
 });
+
+/* ---------- settings view ---------- */
+const SUBJ_LISTS = {
+  q: { key: "subjects", title: "기출 문제 과목", desc: "문제를 등록하고 시험을 보는 과목이에요. 시험, 문제 등록, 안키 카드 화면에 이 순서대로 나와요.", ph: "예: 형법" },
+  m: { key: "manualSubjects", title: "점수만 기록하는 과목", desc: "문제 이미지 없이 「기록」에서 점수만 적는 과목이에요.", ph: "예: 한국사" }
+};
+const subjQCount = s => { let n = 0; for (const q of S.questions.values()) if (q.subject === s) n++; return n; };
+const subjHCount = s => S.history.filter(e => e.subject === s).length;
+function renderSettings(){
+  const st = S.settings;
+  if (!Array.isArray(st.manualSubjects)) st.manualSubjects = [];
+  const list = k => {
+    const arr = st[SUBJ_LISTS[k].key];
+    return `<h2>${SUBJ_LISTS[k].title}</h2>
+    <div class="panel">
+      <p class="note" style="margin:0 0 12px">${SUBJ_LISTS[k].desc}</p>
+      ${arr.length ? `<ul class="slist">${arr.map((s, i) => `
+        <li class="srow">
+          <span class="sname">${h(s)}</span>
+          <span class="note">${k === "q" ? `문제 ${subjQCount(s)}개` : `기록 ${subjHCount(s)}회`}</span>
+          <span class="sact">
+            <button class="btn ghost" data-mv="-1" data-k="${k}" data-i="${i}" ${i === 0 ? "disabled" : ""} aria-label="${h(s)} 위로">↑</button>
+            <button class="btn ghost" data-mv="1" data-k="${k}" data-i="${i}" ${i === arr.length - 1 ? "disabled" : ""} aria-label="${h(s)} 아래로">↓</button>
+            <button class="btn ghost" data-ren="${k}" data-i="${i}">이름 바꾸기</button>
+            <button class="btn ghost danger" data-del="${k}" data-i="${i}">삭제</button>
+          </span>
+        </li>`).join("")}</ul>` : `<p class="note" style="margin:0">아직 없어요. 아래에서 추가하세요.</p>`}
+      <div class="sadd"><input type="text" id="sAdd-${k}" placeholder="${SUBJ_LISTS[k].ph}" aria-label="${SUBJ_LISTS[k].title} 추가" maxlength="30"><button class="btn primary" data-add="${k}">추가</button></div>
+    </div>`;
+  };
+  $("#app").innerHTML = `
+    <h1>설정</h1>
+    <p class="lede">과목을 추가하고 이름과 순서를 바꿀 수 있어요. 이름을 바꾸면 그 과목의 문제와 시험 기록도 함께 바뀌어요.</p>
+    ${list("q")}
+    ${list("m")}
+    <h2>시험</h2>
+    <div class="panel grid2">
+      <div class="field"><label for="sChs">선지 개수</label><select id="sChs"><option ${st.choices == 4 ? "selected" : ""}>4</option><option ${st.choices == 5 ? "selected" : ""}>5</option></select>
+        <span class="note">새로 등록하는 문제에 적용돼요.</span></div>
+    </div>`;
+  const app = $("#app");
+  app.onclick = e => {
+    const add = e.target.closest("[data-add]"); if (add) return addSubjectTo(add.dataset.add);
+    const mv = e.target.closest("[data-mv]"); if (mv) return moveSubject(mv.dataset.k, +mv.dataset.i, +mv.dataset.mv);
+    const ren = e.target.closest("[data-ren]"); if (ren) return renameSubject(ren.dataset.ren, +ren.dataset.i);
+    const del = e.target.closest("[data-del]"); if (del) return deleteSubject(del.dataset.del, +del.dataset.i);
+  };
+  app.querySelectorAll(".sadd input").forEach(inp => inp.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); addSubjectTo(inp.id.slice(5)); } });
+  $("#sChs").onchange = e => { st.choices = +e.target.value; saveSubjSettings(); toast(`선지 개수를 ${st.choices}개로 바꿨어요.`); };
+}
+async function saveSubjSettings(){
+  try { await Store.saveSettings(); } catch { toast("설정을 저장하지 못했어요."); }
+  abWrite("records");
+}
+async function addSubjectTo(k){
+  const inp = $("#sAdd-" + k), name = inp.value.trim().replace(/\s+/g, " ");
+  if (!name){ inp.focus(); toast("과목 이름을 입력하세요."); return; }
+  if (name === "all"){ toast("이 이름은 쓸 수 없어요."); return; }
+  const arr = S.settings[SUBJ_LISTS[k].key];
+  if (arr.includes(name)){ toast("이미 있는 과목이에요."); return; }
+  arr.push(name); await saveSubjSettings();
+  renderSettings(); toast(`'${name}' 과목을 추가했어요.`);
+  $("#sAdd-" + k).focus();
+}
+async function moveSubject(k, i, d){
+  const arr = S.settings[SUBJ_LISTS[k].key], j = i + d;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  await saveSubjSettings(); renderSettings();
+}
+async function renameSubject(k, i){
+  const arr = S.settings[SUBJ_LISTS[k].key], old = arr[i];
+  const name = (prompt(`'${old}'의 새 이름`, old) || "").trim().replace(/\s+/g, " ");
+  if (!name || name === old) return;
+  if (name === "all" || arr.includes(name)){ toast(name === "all" ? "이 이름은 쓸 수 없어요." : "이미 있는 과목 이름이에요."); return; }
+  arr[i] = name;
+  let failed = 0;
+  if (k === "q"){
+    for (const q of [...S.questions.values()]) if (q.subject === old){ try { await Store.update(q.id, { subject: name }); } catch { failed++; } }
+    if (addSubject === old) addSubject = name;
+    if (manageFilter.subject === old) manageFilter.subject = name;
+    if (cardsFilter.subject === old) cardsFilter.subject = name;
+    const gs = ls.get("gm-start"); if (gs && gs.subject === old) ls.set("gm-start", { ...gs, subject: name });
+    const ax = ls.get("gm-ankiexp"); if (ax && ax.subject === old) ls.set("gm-ankiexp", { ...ax, subject: name });
+    if (exam && exam.subject === old){ exam.subject = name; ls.set("gm-exam", exam); }
+  } else if (manualSubject === old) manualSubject = name;
+  let hist = false;
+  S.history.forEach(e => { if (e.subject === old){ e.subject = name; hist = true; } });
+  if (hist){ try { await Store.saveHistory(); } catch {} }
+  await saveSubjSettings();
+  renderSettings();
+  toast(failed ? `이름을 바꿨지만 문제 ${failed}개는 바꾸지 못했어요.` : `'${old}'을(를) '${name}'(으)로 바꿨어요.`);
+}
+async function deleteSubject(k, i){
+  const arr = S.settings[SUBJ_LISTS[k].key], s = arr[i];
+  if (k === "q"){
+    const n = subjQCount(s);
+    if (n){ toast(`'${s}'에 문제 ${n}개가 있어서 지울 수 없어요. 문제 관리에서 문제를 먼저 지우세요.`); return; }
+    if (arr.length === 1){ toast("기출 문제 과목은 하나 이상 있어야 해요."); return; }
+  }
+  const hc = subjHCount(s);
+  if (!confirm(`'${s}' 과목을 지울까요?${hc ? ` 시험 기록 ${hc}회는 「기록」에 그대로 남아요.` : ""}`)) return;
+  arr.splice(i, 1);
+  await saveSubjSettings(); renderSettings(); toast(`'${s}' 과목을 지웠어요.`);
+}
 
 /* ---------- history view ---------- */
 let histFilter = "all";
