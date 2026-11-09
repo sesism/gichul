@@ -1766,16 +1766,19 @@ async function saveFile(filename, blob){
 }
 async function buildFullBackup(onProgress){
   const qs = [...S.questions.values()];
-  const parts = ['{"app":"gichul-mock","kind":"full","version":1,"exportedAt":' + Date.now() + ',"settings":' + JSON.stringify(S.settings) + ',"history":' + JSON.stringify(S.history) + ',"questions":['];
+  let out = new Blob([]);
+  let parts = ['{"app":"gichul-mock","kind":"full","version":1,"exportedAt":' + Date.now() + ',"settings":' + JSON.stringify(S.settings) + ',"history":' + JSON.stringify(S.history) + ',"ankiExp":' + JSON.stringify(ankiExpPack()) + ',"questions":['];
   for (let i = 0; i < qs.length; i++){
     const q = qs[i];
     const blob = q.blob || await (await fetch(Store.img(q))).blob();
     const { blob: _b, img: _i, shard: _s, ...meta } = q;
     parts.push((i ? "," : "") + JSON.stringify({ ...meta, image: await blobToDataURL(blob) }));
+    // move finished text out of JS memory into the browser's blob storage every few images
+    if (parts.length >= 8){ out = new Blob([out, ...parts]); parts = []; }
     if (onProgress && i % 10 === 0) onProgress(i + 1, qs.length);
   }
   parts.push("]}");
-  return new Blob(parts, { type: "application/json" });
+  return new Blob([out, ...parts], { type: "application/json" });
 }
 function buildRecordsBackup(){
   const qs = [...S.questions.values()].map(({ blob, img, shard, ...m }) => m);
@@ -1836,13 +1839,14 @@ async function importData(data, ask = true){
   for (const q of data.questions){
     try{
       const { id, image, ...meta } = q;
-      const blob = await (await fetch(image)).blob();
+      const blob = image instanceof Blob ? image : await (await fetch(image)).blob();
       await Store.put(id, blob, meta);
     } catch { failed++; }
     done++;
     if (done % 20 === 0) toast(`불러오는 중 ${done} / ${data.questions.length}`);
   }
   await mergeSettingsHistory(data);
+  if (typeof data.ankiExp === "string" && data.ankiExp){ Object.assign(S.ankiExp, ankiExpParse(data.ankiExp)); try { await Store.saveAnkiExp(); } catch {} }
   if (ask) toast(failed ? `${done - failed}개를 불러왔고 ${failed}개는 실패했어요.` : `문제 ${done}개를 불러왔어요.`);
   return true;
 }
@@ -1855,7 +1859,29 @@ async function importBackup(file){
 
 /* ---------- auto backup to a folder (File System Access API) ---------- */
 const AB = { supported: typeof window.showDirectoryPicker === "function", dir: null, perm: "none", busy: null, queued: null, pending: null, lastErr: "" };
-const AB_FULL = "기출모의고사-문제.json", AB_REC = "기출모의고사-기록.json";
+const AB_FULL = "기출모의고사-문제.json", AB_REC = "기출모의고사-기록.json";   // AB_FULL: old single-file backup, read only for restore
+const AB_LIST = "기출모의고사-문제목록.json", AB_IMGDIR = "기출모의고사-이미지";
+const abImgName = (q, blob) => {
+  const ext = (/(png|jpe?g|webp|gif)/.exec(blob.type || "") || ["jpg"])[0].replace("jpeg", "jpg");
+  return `${fnv(q.id)}-${fnv([blob.size, blob.type, q.imgAt || 0, q.createdAt || 0].join("|"))}.${ext}`;
+};
+// Writes only images that aren't in the folder yet, one at a time, then a small list file, then removes images no longer used.
+async function abWriteFull(){
+  const dir = await AB.dir.getDirectoryHandle(AB_IMGDIR, { create: true });
+  const have = new Set();
+  for await (const [name, hd] of dir.entries()) if (hd.kind === "file") have.add(name);
+  const keep = new Set(), list = [];
+  for (const q of [...S.questions.values()]){
+    const blob = q.blob || await (await fetch(Store.img(q))).blob();
+    const name = abImgName(q, blob);
+    if (!have.has(name)) await writeFile(dir, name, blob);
+    keep.add(name);
+    const { blob: _b, img: _i, shard: _s, ...meta } = q;
+    list.push({ ...meta, imageFile: name });
+  }
+  await writeFile(AB.dir, AB_LIST, new Blob([JSON.stringify({ app: "gichul-mock", kind: "full", version: 2, exportedAt: Date.now(), settings: S.settings, history: S.history, ankiExp: ankiExpPack(), questions: list })], { type: "application/json" }));
+  for (const name of have) if (!keep.has(name)) { try { await dir.removeEntry(name); } catch {} }
+}
 const mergeKind = (a, b) => a === "full" || b === "full" ? "full" : (a || b);
 function ago(t){
   if (!t) return "아직 없음";
@@ -1884,6 +1910,7 @@ async function abAllow(){
   refreshBackupUI();
 }
 async function abHasFiles(){
+  try { await AB.dir.getFileHandle(AB_LIST); return true; } catch {}
   try { await AB.dir.getFileHandle(AB_FULL); return true; } catch {}
   try { await AB.dir.getFileHandle(AB_REC); return true; } catch {}
   return false;
@@ -1918,7 +1945,7 @@ function abWrite(kind){
     try{
       if (!(await abEnsure(false))){ AB.pending = mergeKind(AB.pending, kind); return; }
       refreshBackupUI();
-      if (kind === "full" || AB.pending === "full"){ await writeFile(AB.dir, AB_FULL, await buildFullBackup()); ls.set("gm-lastBackup", Date.now()); }
+      if (kind === "full" || AB.pending === "full"){ await abWriteFull(); ls.set("gm-lastBackup", Date.now()); }
       await writeFile(AB.dir, AB_REC, buildRecordsBackup()); ls.set("gm-lastRec", Date.now());
       AB.pending = null; AB.lastErr = "";
     } catch (err){ AB.lastErr = "마지막 자동 백업에 실패했어요."; AB.pending = mergeKind(AB.pending, kind); }
@@ -1933,13 +1960,22 @@ async function abRestore(){
   if (!(await abEnsure(true))) { toast("폴더 사용을 허용해야 복구할 수 있어요."); refreshBackupUI(); return; }
   const read = async name => { try { return JSON.parse(await (await (await AB.dir.getFileHandle(name)).getFile()).text()); } catch { return null; } };
   toast("백업 폴더에서 복구하고 있어요…");
-  const full = await read(AB_FULL), rec = await read(AB_REC);
+  let full = await read(AB_LIST), missing = 0;
+  if (full && Array.isArray(full.questions)){
+    let dir = null; try { dir = await AB.dir.getDirectoryHandle(AB_IMGDIR); } catch {}
+    const qs = [];
+    for (const { imageFile, ...q } of full.questions){
+      try { qs.push({ ...q, image: await (await dir.getFileHandle(imageFile)).getFile() }); } catch { missing++; }
+    }
+    full = { ...full, questions: qs };
+  } else full = await read(AB_FULL);
+  const rec = await read(AB_REC);
   if (!full && !rec){ toast("백업 파일을 찾지 못했어요."); return; }
   if (full) await importData(full, false);
   if (rec) await applyRecords(rec, full ? full.exportedAt : 0);
   if (full) ls.set("gm-lastBackup", full.exportedAt);
   if (rec) ls.set("gm-lastRec", rec.exportedAt);
-  toast(`백업에서 문제 ${S.questions.size}개를 복구했어요.`);
+  toast(`백업에서 문제 ${S.questions.size}개를 복구했어요.${missing ? ` 이미지 파일이 없는 ${missing}개는 빠졌어요.` : ""}`);
   render();
 }
 function startBannerHtml(){
