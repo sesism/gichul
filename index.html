@@ -362,7 +362,7 @@ async function compress(file){
 }
 
 /* ---------- storage: cloud (db + assets) with IndexedDB fallback ---------- */
-const S = { mode:null, questions:new Map(), settings:null, history:[], urls:new Map() };
+const S = { mode:null, questions:new Map(), settings:null, history:[], urls:new Map(), ankiExp:{} };
 const DEFAULT_SETTINGS = { subjects:["형사소송법","교정학"], manualSubjects:["국어","영어"], choices:4, count:25, minutes:25, weighted:true };
 const SHARDS = 8;
 
@@ -382,6 +382,7 @@ const Cloud = {
     snaps.forEach(s => s.docs.forEach(d => S.questions.set(d.id, {id:d.id, ...d.data()})));
     const st = await this.col.doc("settings").get(); S.settings = {...DEFAULT_SETTINGS, ...(st.exists ? st.data() : {})};
     const hi = await this.col.doc("history").get(); S.history = hi.exists ? (hi.data().exams || []) : [];
+    try { const ax = await this.col.doc("ankiexp").get(); S.ankiExp = ax.exists ? ankiExpParse(ax.data().list) : {}; } catch { S.ankiExp = {}; }
   },
   img(q){ return "/_blob/" + q.img; },
   async add(blob, meta){
@@ -406,7 +407,8 @@ const Cloud = {
     await this.col.doc(id).delete(); S.questions.delete(id);
   },
   async saveSettings(){ await this.col.doc("settings").set(S.settings); },
-  async saveHistory(){ await this.col.doc("history").set({ exams: S.history.slice(-300) }); }
+  async saveHistory(){ await this.col.doc("history").set({ exams: S.history.slice(-300) }); },
+  async saveAnkiExp(){ await this.col.doc("ankiexp").set({ list: ankiExpPack() }); }
 };
 
 const Local = {
@@ -426,6 +428,7 @@ const Local = {
     (all || []).forEach(q => S.questions.set(q.id, q));
     S.settings = {...DEFAULT_SETTINGS, ...((await this.tx("kv","readonly", s => s.get("settings"))) || {})};
     S.history = (await this.tx("kv","readonly", s => s.get("history"))) || [];
+    try { S.ankiExp = ankiExpParse(await this.tx("kv","readonly", s => s.get("ankiexp"))); } catch { S.ankiExp = {}; }
   },
   img(q){ if (!S.urls.has(q.id) && q.blob) S.urls.set(q.id, URL.createObjectURL(q.blob)); return S.urls.get(q.id) || ""; },
   async add(blob, meta){ const id = "q" + uid36(); const q = {id, type:"q", blob, ...meta}; await this.tx("q","readwrite", s => s.put(q)); S.questions.set(id, q); },
@@ -433,7 +436,8 @@ const Local = {
   async put(id, blob, meta){ const q = {id, type:"q", blob, ...meta}; await this.tx("q","readwrite", s => s.put(q)); if (S.urls.has(id)){ URL.revokeObjectURL(S.urls.get(id)); S.urls.delete(id); } S.questions.set(id, q); },
   async remove(id){ await this.tx("q","readwrite", s => s.delete(id)); S.questions.delete(id); },
   async saveSettings(){ await this.tx("kv","readwrite", s => s.put(S.settings, "settings")); },
-  async saveHistory(){ S.history = S.history.slice(-3000); await this.tx("kv","readwrite", s => s.put(S.history, "history")); }
+  async saveHistory(){ S.history = S.history.slice(-3000); await this.tx("kv","readwrite", s => s.put(S.history, "history")); },
+  async saveAnkiExp(){ await this.tx("kv","readwrite", s => s.put(ankiExpPack(), "ankiexp")); }
 };
 let Store = null;
 
@@ -1334,6 +1338,18 @@ function drawStroke(ctx, st, s, blend){
 function drawStrokes(ctx, strokes, s){ for (const st of strokes || []) drawStroke(ctx, st, s, true); }
 
 /* ----- list view ----- */
+/* what each question looked like when it last went into an apkg: id -> signature of everything the card shows */
+const ankiExpParse = str => { const m = {}; String(str || "").split("\n").forEach(l => { const i = l.lastIndexOf("\t"); if (i > 0) m[l.slice(0, i)] = l.slice(i + 1); }); return m; };
+const ankiExpPack = () => Object.keys(S.ankiExp).filter(id => S.questions.has(id)).map(id => id + "\t" + S.ankiExp[id]).join("\n");
+const ankiSig = q => fnv(JSON.stringify([
+  q.img || (q.blob ? [q.blob.size, q.blob.type] : null), q.imgAt || 0, q.createdAt || 0, qFileName(q),
+  q.note || null, ansLabel(q), q.expl || "", q.subject || "", q.tag || "", !!q.cardOnly
+]));
+const ankiChanged = q => S.ankiExp[q.id] !== ankiSig(q);
+function ankiExportPool(opt){
+  const list = cardsPool(opt.subject, opt.scope === "done" ? "done" : "all");
+  return opt.only === "changed" ? list.filter(ankiChanged) : list;
+}
 function cardsPool(subject, kind){
   let list = [...S.questions.values()];
   if (subject !== "all") list = list.filter(q => q.subject === subject);
@@ -1347,7 +1363,7 @@ function renderCards(){
   const list = cardsPool(f.subject, f.kind);
   cardsOrder = list.map(q => q.id);
   const shown = list.slice(0, 160);
-  const ax = { subject: "all", scope: "done", ...(ls.get("gm-ankiexp") || {}) };
+  const ax = { subject: "all", scope: "done", only: "changed", ...(ls.get("gm-ankiexp") || {}) };
   $("#app").innerHTML = `
     <h1>안키 카드</h1>
     <p class="lede">문제 이미지 아래 여백에 풀이를 쓰고, 문제와 풀이를 안키 덱 파일(.apkg)로 받아요. 안키드로이드에서 받은 파일을 열면 덱이 만들어져요.</p>
@@ -1355,10 +1371,11 @@ function renderCards(){
       <div class="grid4">
         <div class="field"><label for="axSubj">과목</label><select id="axSubj"><option value="all">전체</option>${st.subjects.map(s => `<option ${ax.subject===s?"selected":""}>${h(s)}</option>`).join("")}</select></div>
         <div class="field"><label for="axScope">범위</label><select id="axScope"><option value="done" ${ax.scope==="done"?"selected":""}>필기한 문제만</option><option value="all" ${ax.scope==="all"?"selected":""}>전체 (필기 없으면 뒷면도 문제)</option></select></div>
+        <div class="field"><label for="axOnly">내보낼 카드</label><select id="axOnly"><option value="changed" ${ax.only!=="all"?"selected":""}>바뀐 카드만</option><option value="all" ${ax.only==="all"?"selected":""}>전체 다시 받기</option></select></div>
         <div class="field"><span class="lab">&nbsp;</span><button class="btn primary" id="axGo"></button></div>
       </div>
       <p class="note" style="margin:0" id="axEg"></p>
-      <p class="note" style="margin:0">같은 문제를 다시 내보내면 안키에 새 카드가 생기지 않고 풀이 이미지만 바뀌어요. 복습 기록은 그대로 남아요.</p>
+      <p class="note" style="margin:0">바뀐 카드만: 지난번 받은 뒤 새로 생겼거나 이미지·필기·정답·해설·과목·태그가 바뀐 문제만 담아요. 받은 파일을 안키에 넣지 못했거나 안키에서 덱을 지웠다면 '전체 다시 받기'로 받으세요.<br>어느 쪽이든 이미 있는 카드는 새로 생기지 않고 내용만 바뀌어요. 복습 기록은 그대로 남아요.</p>
       <div class="progress hidden" id="axBar"><i></i></div>
     </div>
     <div class="toolbar">
@@ -1378,16 +1395,16 @@ function renderCards(){
   $("#cfs").onchange = e => { f.subject = e.target.value; renderCards(); };
   $("#cfk").onchange = e => { f.kind = e.target.value; renderCards(); };
   const sync = () => {
-    const a = { subject: $("#axSubj").value, scope: $("#axScope").value };
+    const a = { subject: $("#axSubj").value, scope: $("#axScope").value, only: $("#axOnly").value };
     ls.set("gm-ankiexp", a);
-    const n = cardsPool(a.subject, a.scope === "done" ? "done" : "all").length;
-    const go = $("#axGo"); go.disabled = !n; go.textContent = n ? `안키 덱 받기 (${n}장)` : "내보낼 카드 없음";
+    const n = ankiExportPool(a).length;
+    const go = $("#axGo"); go.disabled = !n; go.textContent = n ? `안키 덱 받기 (${n}장)` : a.only === "changed" ? "바뀐 카드 없음" : "내보낼 카드 없음";
     $("#axEg").textContent = a.subject === "all"
       ? `과목 이름으로 덱이 따로 만들어져요. 예: ${st.subjects.slice(0, 3).join(", ") || "과목"}`
       : `'${a.subject}' 덱으로 만들어져요.`;
     return a;
   };
-  ["axSubj", "axScope"].forEach(id => $("#" + id).addEventListener("change", sync));
+  ["axSubj", "axScope", "axOnly"].forEach(id => $("#" + id).addEventListener("change", sync));
   sync();
   $("#axGo").onclick = () => exportAnki(sync());
 }
@@ -1585,8 +1602,9 @@ function loadSql(){
 }
 async function exportAnki(opt){
   const btn = $("#axGo"), bar = $("#axBar"), label = btn.textContent;
-  const qs = cardsPool(opt.subject, opt.scope === "done" ? "done" : "all");
+  const qs = ankiExportPool(opt);
   if (!qs.length) return;
+  const sigs = qs.map(ankiSig);
   btn.disabled = true; bar.classList.remove("hidden");
   try{
     btn.textContent = "준비 중…";
@@ -1614,17 +1632,21 @@ async function exportAnki(opt){
         fields: [`<img src="${h(fName)}">`, `<img src="${h(bName)}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
         tags: ["기출", String(q.subject).replace(/\s+/g, "_")],
         sort: fName,
-        mod: Math.floor(Math.max((q.note && q.note.at) || 0, q.createdAt || 0, q.imgAt || 0) / 1000) || sec
+        mod: sec   // always newer than what Anki has, so re-imported notes really get updated (answer/explanation edits included)
       });
     }
     btn.textContent = "파일 묶는 중…";
     const blob = await buildApkg(SQL, notes, media);
     const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
     const fileBase = opt.subject === "all" ? "전체과목" : opt.subject;
-    await saveFile(`${fileBase.replace(/[\\/:*?"<>|]+/g, "_")}-${ymd}.apkg`, blob);
+    const saved = await saveFile(`${fileBase.replace(/[\\/:*?"<>|]+/g, "_")}-${ymd}.apkg`, blob);
+    if (saved === false) throw { code: "cancelled" };   // share sheet dismissed: don't mark these cards as exported
+    qs.forEach((q, i) => { S.ankiExp[q.id] = sigs[i]; });
+    try { await Store.saveAnkiExp(); } catch {}
     toast(`카드 ${qs.length}장을 안키 덱 파일로 받았어요.`);
   } catch (err){ if (!err || (err.code !== "silent" && err.code !== "cancelled")) toast("안키 덱 파일을 만들지 못했어요."); }
   btn.disabled = false; btn.textContent = label; bar.classList.add("hidden");
+  if (document.body.contains(btn)) $("#axSubj").dispatchEvent(new Event("change"));   // refresh the count ("바뀐 카드 없음" after a changed-only export)
 }
 
 /* ---------- excel import ---------- */
@@ -1731,15 +1753,16 @@ function backupNote(){
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 async function saveFile(filename, blob){
   const dl = window.claude && window.claude.use ? await claude.use("downloads") : null;
-  if (dl) { await dl.save({ filename, data: blob }); return; }
+  if (dl) { await dl.save({ filename, data: blob }); return true; }
   if (isIOS && navigator.canShare){
     try {
       const f = new File([blob], filename, { type: blob.type || "application/octet-stream" });
-      if (navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: filename }); return; }
-    } catch (err) { if (err && err.name === "AbortError") return; }
+      if (navigator.canShare({ files: [f] })) { await navigator.share({ files: [f], title: filename }); return true; }
+    } catch (err) { if (err && err.name === "AbortError") return false; }
   }
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  return true;
 }
 async function buildFullBackup(onProgress){
   const qs = [...S.questions.values()];
