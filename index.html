@@ -916,7 +916,7 @@ function renderAdd(){
       <div class="drop" id="drop" tabindex="0" role="button"><b>이미지를 끌어다 놓거나 눌러서 선택</b><span class="note">여러 장을 한 번에 올릴 수 있어요</span></div>
       <div class="srcbar">
         <button class="btn" id="gdPick"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 3h7.6l6 10.4-3.8 6.6H6l-3.8-6.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.2 3l5.9 10.4H21.8M2.2 13.4L8 3.6M6 20l6-10.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>구글 드라이브 폴더에서 가져오기</button>
-        ${ls.get("gm-gdfolder") && gdConfigured() ? `<button class="btn ghost" id="gdAgain">'${h(ls.get("gm-gdfolder").name)}' 새 이미지 가져오기</button>` : ""}
+        ${ls.get("gm-gdfolder") && gdConfigured() ? `<button class="btn ghost" id="gdAgain">'${h(ls.get("gm-gdfolder").name)}' 다시 확인</button>` : ""}
         <button class="btn ghost" id="dirPick">이 기기의 폴더 선택</button>
         <span class="note" id="gdStatus"></span>
       </div>
@@ -1019,7 +1019,7 @@ async function savePending(all){
   for (const p of todo){
     try{
       const blob = await compress(p.file);
-      const ans = { ...(p.answer ? { answer: p.answer } : { cardOnly: true }), ...(p.gid ? { gid: p.gid } : {}) };
+      const ans = { ...(p.answer ? { answer: p.answer } : { cardOnly: true }), ...(p.gid ? { gid: p.gid, gmod: p.gmod || "", gname: p.gname || "", gfolder: p.gfolder || "" } : {}) };
       await Store.add(blob, { subject: addSubject, ...ans, choices: S.settings.choices, tag: addTag.trim(), createdAt: base + done, n:0, w:0, last:null, lastAt:0 });
       p.saved = true;
     } catch (err){
@@ -1575,7 +1575,7 @@ async function exportAnki(opt){
         fields: [`<img src="${fName}">`, `<img src="${bName}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
         tags: ["기출", String(q.subject).replace(/\s+/g, "_")],
         sort: fName,
-        mod: Math.floor(Math.max((q.note && q.note.at) || 0, q.createdAt || 0) / 1000) || sec
+        mod: Math.floor(Math.max((q.note && q.note.at) || 0, q.createdAt || 0, q.imgAt || 0) / 1000) || sec
       });
     }
     btn.textContent = "파일 묶는 중…";
@@ -1982,7 +1982,7 @@ async function gdList(token, folderId){
   const out = []; let page = "";
   const q = encodeURIComponent(`'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and mimeType contains 'image/'`);
   do {
-    const r = await gdFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${page ? "&pageToken=" + encodeURIComponent(page) : ""}`, token);
+    const r = await gdFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,md5Checksum)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${page ? "&pageToken=" + encodeURIComponent(page) : ""}`, token);
     const j = await r.json(); out.push(...(j.files || [])); page = j.nextPageToken || "";
   } while (page);
   return out;
@@ -2000,42 +2000,121 @@ function gdMessage(err){
   return "드라이브에서 가져오지 못했어요.";
 }
 let gdBusy = false;
+const GD_STAGE_MAX = 100;   // up to this many new images go to the review list; more are registered directly
+async function gdDownload(f, token){
+  const blob = await (await gdFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?alt=media&supportsAllDrives=true`, token)).blob();
+  return new File([blob], f.name, { type: f.mimeType || blob.type });
+}
+async function gdPool(items, n, fn){
+  let next = 0;
+  const worker = async () => { while (next < items.length){ const k = next++; await fn(items[k], k); } };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+}
+async function storeUpdateMany(list){
+  if (Store === Local){
+    await Local.tx("q", "readwrite", st => { for (const [q, patch] of list){ const cur = S.questions.get(q.id); if (cur){ Object.assign(cur, patch); st.put(cur); } } });
+  } else for (const [q, patch] of list){ try { await Store.update(q.id, patch); } catch {} }
+}
 async function gdImport(again){
   if (gdBusy) return;
   if (!gdConfigured()){ toast("설정에서 구글 드라이브 연결 정보를 먼저 넣어주세요."); location.hash = "settings"; return; }
   const status = t => { const el = $("#gdStatus"); if (el) el.textContent = t; };
   gdBusy = true;
+  let lock = null;
   try{
     await gdPrepare();
     const token = await gdToken();
     const folder = again ? ls.get("gm-gdfolder") : await gdPickFolder(token);
     if (!folder) return;
     ls.set("gm-gdfolder", folder);
+    try { if (navigator.wakeLock) lock = await navigator.wakeLock.request("screen"); } catch {}
     status(`'${folder.name}' 폴더 확인 중…`);
     const files = (await gdList(token, folder.id)).sort((a, b) => natSort(a.name, b.name));
-    const known = new Set([...S.questions.values()].map(q => q.gid).concat(pending.map(p => p.gid)).filter(Boolean));
-    const fresh = files.filter(f => !known.has(f.id));
-    const skipped = files.length - fresh.length;
     if (!files.length){ status(""); toast(`'${folder.name}' 폴더에 이미지가 없어요.`); return; }
-    if (!fresh.length){ status(""); toast(`'${folder.name}'의 이미지 ${files.length}장은 이미 모두 등록했거나 올려뒀어요.`); return; }
-    const got = new Array(fresh.length); let done = 0, failed = 0, next = 0;
-    const worker = async () => {
-      while (next < fresh.length){
-        const k = next++, f = fresh[k];
-        try {
-          const blob = await (await gdFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?alt=media&supportsAllDrives=true`, token)).blob();
-          got[k] = new File([blob], f.name, { type: f.mimeType || blob.type });
-        } catch (err){ if (err && err.gd === "expired") throw err; failed++; }
-        done++; status(`'${folder.name}'에서 받는 중 ${done} / ${fresh.length}`);
+    const ver = f => f.md5Checksum || f.modifiedTime || "";
+    const gmeta = f => ({ gid: f.id, gmod: ver(f), gname: f.name, gfolder: folder.id });
+    const ids = new Set(files.map(f => f.id));
+    const byGid = new Map(), gone = new Map();
+    for (const q of S.questions.values()){
+      if (!q.gid) continue;
+      byGid.set(q.gid, q);
+      if (q.gfolder === folder.id && q.gname && !ids.has(q.gid)) gone.set(q.gname, q);   // deleted from the folder
+    }
+    const inPending = new Set(pending.map(p => p.gid).filter(Boolean));
+    const fresh = [], changed = [], quiet = [];
+    for (const f of files){
+      const q = byGid.get(f.id);
+      if (!q){
+        if (inPending.has(f.id)) continue;
+        const old = gone.get(f.name);   // same name re-uploaded: replace instead of duplicating
+        if (old){ changed.push([old, f]); gone.delete(f.name); } else fresh.push(f);
+        continue;
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, fresh.length) }, worker));
-    got.forEach((file, k) => { if (file) pending.push({ file, name: file.name, url: URL.createObjectURL(file), answer: null, gid: fresh[k].id }); });
-    renderAdd();
-    const n = fresh.length - failed;
-    toast(`'${folder.name}'에서 ${n}장을 가져왔어요.` + (skipped ? ` 이미 있는 ${skipped}장은 건너뛰었어요.` : "") + (failed ? ` ${failed}장은 받지 못했어요.` : ""));
-  } catch (err){ status(""); toast(gdMessage(err)); }
-  finally { gdBusy = false; }
+      const v = ver(f), patch = {};
+      if (q.gfolder !== folder.id) patch.gfolder = folder.id;
+      if (q.gname !== f.name) patch.gname = f.name;
+      if (!q.gmod || (q.gmod === f.modifiedTime && v !== q.gmod)) patch.gmod = v;   // first check, or upgrade from time to checksum
+      else if (v && v !== q.gmod){ changed.push([q, f]); continue; }
+      if (Object.keys(patch).length) quiet.push([q, patch]);
+    }
+    if (quiet.length) await storeUpdateMany(quiet);
+
+    let updated = 0, inked = 0, failed = 0, done = 0;
+    if (changed.length){
+      await gdPool(changed, 3, async ([q, f]) => {
+        try{
+          const blob = await compress(await gdDownload(f, token));
+          const { id, blob: _b, img: _i, shard: _s, type: _t, ...meta } = S.questions.get(q.id) || q;
+          await Store.put(q.id, blob, { ...meta, ...gmeta(f), imgAt: Date.now() });
+          updated++; if (hasInk(q)) inked++;
+        } catch (err){ if (err && err.gd === "expired") throw err; failed++; }
+        status(`바뀐 이미지 받는 중 ${++done} / ${changed.length}`);
+      });
+    }
+
+    let added = 0, staged = 0;
+    if (fresh.length > GD_STAGE_MAX){
+      const ok = confirm(`'${folder.name}'에 새 이미지 ${fresh.length}장이 있어요.\n목록에 하나씩 올리기엔 많아서, '${addSubject}' 과목에 정답 없이 바로 등록할게요. 정답은 나중에 문제 관리에서 넣을 수 있어요.\n\n진행할까요? 중간에 멈춰도 다음에 '다시 확인'을 누르면 남은 것부터 이어서 받아요.`);
+      if (ok){
+        const subject = addSubject, tag = addTag.trim(), base = Date.now(); done = 0;
+        await gdPool(fresh, 3, async (f, k) => {
+          try{
+            const blob = await compress(await gdDownload(f, token));
+            await Store.add(blob, { subject, cardOnly: true, choices: S.settings.choices, tag, createdAt: base + k, n:0, w:0, last:null, lastAt:0, ...gmeta(f) });
+            added++;
+          } catch (err){
+            if (err && err.gd === "expired") throw err;
+            if (err && err.code === "quota_exceeded") throw { gd: "quota" };
+            failed++;
+          }
+          status(`새 이미지 등록 중 ${++done} / ${fresh.length}`);
+        });
+      }
+    } else if (fresh.length){
+      const got = new Array(fresh.length); done = 0;
+      await gdPool(fresh, 4, async (f, k) => {
+        try { got[k] = await gdDownload(f, token); } catch (err){ if (err && err.gd === "expired") throw err; failed++; }
+        status(`'${folder.name}'에서 받는 중 ${++done} / ${fresh.length}`);
+      });
+      got.forEach((file, k) => { if (file){ pending.push({ file, name: file.name, url: URL.createObjectURL(file), answer: null, ...gmeta(fresh[k]) }); staged++; } });
+    }
+
+    status("");
+    if (currentView() === "add") renderAdd();
+    const parts = [];
+    if (staged) parts.push(`새 이미지 ${staged}장을 목록에 올렸어요`);
+    if (added) parts.push(`새 이미지 ${added}장을 등록했어요`);
+    if (updated) parts.push(`바뀐 이미지 ${updated}장을 새로 받았어요` + (inked ? ` (필기한 ${inked}장은 위치가 맞는지 확인하세요)` : ""));
+    if (failed) parts.push(`${failed}장은 받지 못했어요`);
+    toast(parts.length ? parts.join(", ") + "." : `'${folder.name}'의 이미지 ${files.length}장은 바뀐 게 없어요.`);
+  } catch (err){
+    status("");
+    if (currentView() === "add") renderAdd();
+    toast(err && err.gd === "quota" ? "저장 공간이 가득 찼어요. 지금까지 받은 이미지는 저장됐어요." : gdMessage(err));
+  } finally {
+    gdBusy = false;
+    try { if (lock) await lock.release(); } catch {}
+  }
 }
 function gdSettingsHtml(){
   const c = gdCfg();
