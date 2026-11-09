@@ -1019,7 +1019,7 @@ async function savePending(all){
   for (const p of todo){
     try{
       const blob = await compress(p.file);
-      const ans = { ...(p.answer ? { answer: p.answer } : { cardOnly: true }), ...(p.gid ? { gid: p.gid, gmod: p.gmod || "", gname: p.gname || "", gfolder: p.gfolder || "" } : {}) };
+      const ans = { ...(p.answer ? { answer: p.answer } : { cardOnly: true }), ...(p.gid ? { gid: p.gid, gmod: p.gmod || "", gname: p.gname || "", gfolder: p.gfolder || "" } : {}), fname: p.name || "" };
       await Store.add(blob, { subject: addSubject, ...ans, choices: S.settings.choices, tag: addTag.trim(), createdAt: base + done, n:0, w:0, last:null, lastAt:0 });
       p.saved = true;
     } catch (err){
@@ -1037,6 +1037,7 @@ async function savePending(all){
 }
 
 /* ---------- manage view ---------- */
+const qFileName = q => q.gname || q.fname || q.src || "";
 function renderManage(){
   const st = S.settings, f = manageFilter, now = Date.now();
   let list = [...S.questions.values()];
@@ -1048,7 +1049,7 @@ function renderManage(){
   if (f.kind === "cardonly") list = list.filter(q => q.cardOnly);
   if (f.kind === "drive") list = list.filter(q => q.gid);
   const rate = q => q.n ? q.w / q.n : -1;
-  list.sort(f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : (a, b) => (b.createdAt||0) - (a.createdAt||0));
+  list.sort(f.sort === "name" ? (a, b) => { const x = qFileName(a), y = qFileName(b); return x && y ? natSort(x, y) : x ? -1 : y ? 1 : (a.createdAt||0) - (b.createdAt||0); } : f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : (a, b) => (b.createdAt||0) - (a.createdAt||0));
   const shown = list.slice(0, 120);
   $("#app").innerHTML = `
     <h1>문제 관리</h1>
@@ -1062,14 +1063,14 @@ function renderManage(){
         <option value="wrong" ${f.kind==="wrong"?"selected":""}>한 번이라도 틀린 문제</option><option value="lucky" ${f.kind==="lucky"?"selected":""}>헷갈렸지만 맞은 문제</option>
         <option value="unseen" ${f.kind==="unseen"?"selected":""}>안 푼 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option><option value="drive" ${f.kind==="drive"?"selected":""}>구글 드라이브에서 가져온 문제</option></select></div>
       <div class="field"><label for="fo">정렬</label><select id="fo">
-        <option value="new">최근 등록순</option><option value="rate" ${f.sort==="rate"?"selected":""}>오답률 높은 순</option><option value="old" ${f.sort==="old"?"selected":""}>오래 안 본 순</option></select></div>
+        <option value="new">최근 등록순</option><option value="rate" ${f.sort==="rate"?"selected":""}>오답률 높은 순</option><option value="old" ${f.sort==="old"?"selected":""}>오래 안 본 순</option><option value="name" ${f.sort==="name"?"selected":""}>이미지 파일 이름순</option></select></div>
       <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${shown.length}개 표시` : ""}</span>
       ${list.length ? `<button class="btn ghost danger" id="bulkDel">이 목록 ${list.length}개 모두 삭제</button>` : ""}
     </div>
     ${shown.length ? `<div class="qgrid" id="qgrid">${shown.map(q => {
       const r = rate(q);
       return `<div class="mcard" data-id="${q.id}">
-        <div class="pthumb" data-zoom="${q.id}"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>
+        <div class="pthumb" data-zoom="${q.id}"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>${qFileName(q) ? `<div class="pname">${h(qFileName(q))}</div>` : ""}
         <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span></div>
         <div class="mrow"><span>정답 <select data-ans="${q.id}">${q.cardOnly ? `<option value="" selected>없음</option>` : ""}${Array.from({length: q.choices || st.choices}, (_, c) => `<option value="${c+1}" ${q.answer===c+1?"selected":""}>${CIRC[c]}</option>`).join("")}</select></span>
           ${answersOf(q).length > 1 ? `<span class="note">${q.noAnswer ? "정답 없음" : "복수정답 " + ansLabel(q)}</span>` : ""}<span class="rate${r >= 0.5 ? " hi" : ""}">${q.cardOnly ? `<span class="note">시험에 안 나옴</span>` : q.n ? `${q.n}회 중 ${q.w}회 틀림` : "안 푼 문제"}</span></div>
