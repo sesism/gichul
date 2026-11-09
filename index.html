@@ -1046,6 +1046,7 @@ function renderManage(){
   if (f.kind === "lucky") list = list.filter(q => q.last === 2);
   if (f.kind === "unseen") list = list.filter(q => !q.n && !q.cardOnly);
   if (f.kind === "cardonly") list = list.filter(q => q.cardOnly);
+  if (f.kind === "drive") list = list.filter(q => q.gid);
   const rate = q => q.n ? q.w / q.n : -1;
   list.sort(f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : (a, b) => (b.createdAt||0) - (a.createdAt||0));
   const shown = list.slice(0, 120);
@@ -1059,10 +1060,11 @@ function renderManage(){
       <div class="field"><label for="fk">보기</label><select id="fk">
         <option value="all">전체</option><option value="recent" ${f.kind==="recent"?"selected":""}>최근에 틀린 문제</option>
         <option value="wrong" ${f.kind==="wrong"?"selected":""}>한 번이라도 틀린 문제</option><option value="lucky" ${f.kind==="lucky"?"selected":""}>헷갈렸지만 맞은 문제</option>
-        <option value="unseen" ${f.kind==="unseen"?"selected":""}>안 푼 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option></select></div>
+        <option value="unseen" ${f.kind==="unseen"?"selected":""}>안 푼 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option><option value="drive" ${f.kind==="drive"?"selected":""}>구글 드라이브에서 가져온 문제</option></select></div>
       <div class="field"><label for="fo">정렬</label><select id="fo">
         <option value="new">최근 등록순</option><option value="rate" ${f.sort==="rate"?"selected":""}>오답률 높은 순</option><option value="old" ${f.sort==="old"?"selected":""}>오래 안 본 순</option></select></div>
       <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${shown.length}개 표시` : ""}</span>
+      ${list.length ? `<button class="btn ghost danger" id="bulkDel">이 목록 ${list.length}개 모두 삭제</button>` : ""}
     </div>
     ${shown.length ? `<div class="qgrid" id="qgrid">${shown.map(q => {
       const r = rate(q);
@@ -1088,6 +1090,19 @@ function renderManage(){
     else if (act === "now") abWrite("full");
   };
   $("#bkFile").onchange = e => { const file = e.target.files[0]; e.target.value = ""; if (file) importBackup(file); };
+  const bd = $("#bulkDel");
+  if (bd) bd.onclick = async () => {
+    const n = list.length, all = n === S.questions.size;
+    if (all){
+      const typed = prompt(`등록한 문제 ${n}개를 전부 지워요. 정답, 풀이 기록, 필기도 함께 지워지고 되돌릴 수 없어요.\n\n계속하려면 '삭제'라고 입력하세요.`);
+      if ((typed || "").trim() !== "삭제"){ if (typed != null) toast("'삭제'라고 입력해야 지워져요."); return; }
+    } else if (!confirm(`지금 목록의 문제 ${n}개를 지울까요?\n정답, 풀이 기록, 필기도 함께 지워지고 되돌릴 수 없어요.`)) return;
+    bd.disabled = true;
+    const failed = await removeMany(list.map(q => q.id), (i, t) => bd.textContent = `삭제 중 ${i} / ${t}`);
+    abWrite("records");
+    toast(failed ? `${n - failed}개를 지웠고 ${failed}개는 지우지 못했어요.` : `문제 ${n}개를 지웠어요.`);
+    renderManage();
+  };
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
     const z = e.target.closest("[data-zoom]"); if (z) return zoom(z.dataset.zoom);
@@ -1101,6 +1116,26 @@ function renderManage(){
     const wasCard = (S.questions.get(s.dataset.ans) || {}).cardOnly;
     try { await Store.update(s.dataset.ans, { answer: +s.value, answers: [+s.value], noAnswer: false, cardOnly: false }); if (wasCard) { renderManage(); toast("정답을 넣었어요. 이제 시험에도 나와요."); abWrite("records"); return; } toast("정답을 고쳤어요."); abWrite("records"); } catch { toast("저장하지 못했어요."); }
   };
+}
+
+async function removeMany(ids, onProgress){
+  let failed = 0;
+  if (Store === Local){
+    for (let i = 0; i < ids.length; i += 200){
+      const chunk = ids.slice(i, i + 200);
+      try{
+        await Local.tx("q", "readwrite", st => { chunk.forEach(id => st.delete(id)); });
+        chunk.forEach(id => { S.questions.delete(id); if (S.urls.has(id)){ URL.revokeObjectURL(S.urls.get(id)); S.urls.delete(id); } });
+      } catch { failed += chunk.length; }
+      if (onProgress) onProgress(Math.min(i + 200, ids.length), ids.length);
+    }
+  } else {
+    for (let i = 0; i < ids.length; i++){
+      try { await Store.remove(ids[i]); } catch { failed++; }
+      if (onProgress && i % 10 === 0) onProgress(i + 1, ids.length);
+    }
+  }
+  return failed;
 }
 
 /* ---------- drawing on questions ---------- */
