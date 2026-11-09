@@ -1347,18 +1347,17 @@ function renderCards(){
   const list = cardsPool(f.subject, f.kind);
   cardsOrder = list.map(q => q.id);
   const shown = list.slice(0, 160);
-  const ax = ls.get("gm-ankiexp") || { deck: "기출", subject: "all", scope: "done", split: true };
+  const ax = { subject: "all", scope: "done", ...(ls.get("gm-ankiexp") || {}) };
   $("#app").innerHTML = `
     <h1>안키 카드</h1>
     <p class="lede">문제 이미지 아래 여백에 풀이를 쓰고, 문제와 풀이를 안키 덱 파일(.apkg)로 받아요. 안키드로이드에서 받은 파일을 열면 덱이 만들어져요.</p>
     <div class="panel stack" id="axPanel" style="margin-bottom:24px;gap:14px">
       <div class="grid4">
-        <div class="field"><label for="axDeck">덱 이름</label><input id="axDeck" type="text" value="${h(ax.deck)}"></div>
         <div class="field"><label for="axSubj">과목</label><select id="axSubj"><option value="all">전체</option>${st.subjects.map(s => `<option ${ax.subject===s?"selected":""}>${h(s)}</option>`).join("")}</select></div>
         <div class="field"><label for="axScope">범위</label><select id="axScope"><option value="done" ${ax.scope==="done"?"selected":""}>필기한 문제만</option><option value="all" ${ax.scope==="all"?"selected":""}>전체 (필기 없으면 뒷면도 문제)</option></select></div>
         <div class="field"><span class="lab">&nbsp;</span><button class="btn primary" id="axGo"></button></div>
       </div>
-      <label class="check"><input type="checkbox" id="axSplit" ${ax.split ? "checked" : ""}><span>과목별 하위 덱으로 나누기 <span class="note" id="axEg"></span></span></label>
+      <p class="note" style="margin:0" id="axEg"></p>
       <p class="note" style="margin:0">같은 문제를 다시 내보내면 안키에 새 카드가 생기지 않고 풀이 이미지만 바뀌어요. 복습 기록은 그대로 남아요.</p>
       <div class="progress hidden" id="axBar"><i></i></div>
     </div>
@@ -1379,15 +1378,16 @@ function renderCards(){
   $("#cfs").onchange = e => { f.subject = e.target.value; renderCards(); };
   $("#cfk").onchange = e => { f.kind = e.target.value; renderCards(); };
   const sync = () => {
-    const a = { deck: $("#axDeck").value.trim() || "기출", subject: $("#axSubj").value, scope: $("#axScope").value, split: $("#axSplit").checked };
+    const a = { subject: $("#axSubj").value, scope: $("#axScope").value };
     ls.set("gm-ankiexp", a);
     const n = cardsPool(a.subject, a.scope === "done" ? "done" : "all").length;
     const go = $("#axGo"); go.disabled = !n; go.textContent = n ? `안키 덱 받기 (${n}장)` : "내보낼 카드 없음";
-    const egSubj = a.subject !== "all" ? a.subject : (st.subjects[0] || "과목");
-    $("#axEg").textContent = `예: ${a.deck}::${egSubj}`;
+    $("#axEg").textContent = a.subject === "all"
+      ? `과목 이름으로 덱이 따로 만들어져요. 예: ${st.subjects.slice(0, 3).join(", ") || "과목"}`
+      : `'${a.subject}' 덱으로 만들어져요.`;
     return a;
   };
-  ["axDeck", "axSubj", "axScope", "axSplit"].forEach(id => $("#" + id).addEventListener(id === "axDeck" ? "input" : "change", sync));
+  ["axSubj", "axScope"].forEach(id => $("#" + id).addEventListener("change", sync));
   sync();
   $("#axGo").onclick = () => exportAnki(sync());
 }
@@ -1610,7 +1610,7 @@ async function exportAnki(opt){
       const src = q.subject + (q.tag ? " · " + q.tag : "");
       notes.push({
         guid: "gichul-" + q.id,
-        deck: opt.split ? `${opt.deck}::${q.subject}` : opt.deck,
+        deck: String(q.subject).replace(/::/g, ":").trim() || "기출",
         fields: [`<img src="${h(fName)}">`, `<img src="${h(bName)}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
         tags: ["기출", String(q.subject).replace(/\s+/g, "_")],
         sort: fName,
@@ -1620,7 +1620,8 @@ async function exportAnki(opt){
     btn.textContent = "파일 묶는 중…";
     const blob = await buildApkg(SQL, notes, media);
     const d = new Date(), ymd = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
-    await saveFile(`${opt.deck.replace(/[\\/:*?"<>|]+/g, "_")}-${ymd}.apkg`, blob);
+    const fileBase = opt.subject === "all" ? "전체과목" : opt.subject;
+    await saveFile(`${fileBase.replace(/[\\/:*?"<>|]+/g, "_")}-${ymd}.apkg`, blob);
     toast(`카드 ${qs.length}장을 안키 덱 파일로 받았어요.`);
   } catch (err){ if (!err || (err.code !== "silent" && err.code !== "cancelled")) toast("안키 덱 파일을 만들지 못했어요."); }
   btn.disabled = false; btn.textContent = label; bar.classList.add("hidden");

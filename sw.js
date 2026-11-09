@@ -1,4 +1,4 @@
-const VERSION = "gichul-v9";
+const VERSION = "gichul-v10";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png", "./vendor/sql-wasm.js", "./vendor/sql-wasm.wasm"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
