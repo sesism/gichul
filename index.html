@@ -258,6 +258,9 @@ dialog .dbar{display:flex;justify-content:space-between;align-items:center;gap:1
 }
 @media print{.inkbar,.ink{display:none !important}}
 /* settings */
+.srcbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.srcbar svg{width:18px;height:18px;vertical-align:-3px;margin-right:6px}
+code.origin{font-size:14px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:9px 12px;word-break:break-all;user-select:all}
 .slist{list-style:none;margin:0;padding:0}
 .srow{display:flex;align-items:center;gap:6px 12px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .sname{font-weight:600;font-size:16px}
@@ -911,7 +914,13 @@ function renderAdd(){
         <div class="field"><label for="tag">출처 메모 <span class="note">(선택)</span></label><input id="tag" type="text" placeholder="예: 2024 국가직 9급" value="${h(addTag)}"></div>
       </div>
       <div class="drop" id="drop" tabindex="0" role="button"><b>이미지를 끌어다 놓거나 눌러서 선택</b><span class="note">여러 장을 한 번에 올릴 수 있어요</span></div>
-      <input type="file" id="file" accept="image/*" multiple class="hidden">
+      <div class="srcbar">
+        <button class="btn" id="gdPick"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.2 3h7.6l6 10.4-3.8 6.6H6l-3.8-6.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8.2 3l5.9 10.4H21.8M2.2 13.4L8 3.6M6 20l6-10.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>구글 드라이브 폴더에서 가져오기</button>
+        ${ls.get("gm-gdfolder") && gdConfigured() ? `<button class="btn ghost" id="gdAgain">'${h(ls.get("gm-gdfolder").name)}' 새 이미지 가져오기</button>` : ""}
+        <button class="btn ghost" id="dirPick">이 기기의 폴더 선택</button>
+        <span class="note" id="gdStatus"></span>
+      </div>
+      <input type="file" id="file" accept="image/*" multiple class="hidden"><input type="file" id="dirFile" webkitdirectory multiple class="hidden">
       ${pending.length ? `
         <div class="field"><label for="bulk">정답 한 번에 입력 <span class="note">— 순서대로 ${pending.length}개, 예: 3142 2413 또는 3,1,4,2</span></label>
           <textarea id="bulk" placeholder="31422413..."></textarea></div>
@@ -960,6 +969,11 @@ function renderAdd(){
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
   file.onchange = () => { addFiles(file.files); file.value = ""; };
+  $("#gdPick").onclick = () => gdImport(false);
+  if ($("#gdAgain")) $("#gdAgain").onclick = () => gdImport(true);
+  $("#dirPick").onclick = () => $("#dirFile").click();
+  $("#dirFile").onchange = e => { const fs = e.target.files; if (fs.length) addFiles(fs); e.target.value = ""; };
+  if (gdConfigured()) gdPrepare().catch(() => {});
   if (!pending.length) return;
 
   $("#bulk").oninput = e => {
@@ -1005,7 +1019,7 @@ async function savePending(all){
   for (const p of todo){
     try{
       const blob = await compress(p.file);
-      const ans = p.answer ? { answer: p.answer } : { cardOnly: true };
+      const ans = { ...(p.answer ? { answer: p.answer } : { cardOnly: true }), ...(p.gid ? { gid: p.gid } : {}) };
       await Store.add(blob, { subject: addSubject, ...ans, choices: S.settings.choices, tag: addTag.trim(), createdAt: base + done, n:0, w:0, last:null, lastAt:0 });
       p.saved = true;
     } catch (err){
@@ -1904,6 +1918,158 @@ document.addEventListener("click", e => {
   else if (b.dataset.act === "restore") abRestore();
 });
 
+/* ---------- google drive: import a whole folder ---------- */
+const GD = { token: null, exp: 0, tc: null, tcId: "", ready: null, onTok: null, onErr: null };
+const GD_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const gdCfg = () => ls.get("gm-gdrive") || {};
+const gdConfigured = () => { const c = gdCfg(); return !!(c.clientId && c.apiKey); };
+const scriptLoads = new Map();
+function loadScriptOnce(src){
+  if (!scriptLoads.has(src)) scriptLoads.set(src, new Promise((res, rej) => {
+    const s = document.createElement("script"); s.src = src; s.async = true;
+    s.onload = res; s.onerror = () => { scriptLoads.delete(src); s.remove(); rej({ gd: "script" }); };
+    document.head.appendChild(s);
+  }));
+  return scriptLoads.get(src);
+}
+function gdPrepare(){
+  if (!GD.ready) GD.ready = Promise.all([
+    loadScriptOnce("https://accounts.google.com/gsi/client"),
+    loadScriptOnce("https://apis.google.com/js/api.js").then(() => new Promise((res, rej) => gapi.load("picker", { callback: res, onerror: () => rej({ gd: "script" }) })))
+  ]).catch(err => { GD.ready = null; throw err; });
+  return GD.ready;
+}
+function gdToken(){
+  if (GD.token && Date.now() < GD.exp - 60000) return Promise.resolve(GD.token);
+  return new Promise((res, rej) => {
+    const c = gdCfg();
+    if (!GD.tc || GD.tcId !== c.clientId){
+      GD.tc = google.accounts.oauth2.initTokenClient({ client_id: c.clientId, scope: GD_SCOPE,
+        callback: r => GD.onTok && GD.onTok(r), error_callback: e => GD.onErr && GD.onErr(e) });
+      GD.tcId = c.clientId;
+    }
+    GD.onTok = r => {
+      if (r.error) return rej({ gd: r.error });
+      GD.token = r.access_token; GD.exp = Date.now() + (+r.expires_in || 3600) * 1000; res(GD.token);
+    };
+    GD.onErr = e => rej({ gd: (e && e.type) || "popup_failed_to_open" });
+    GD.tc.requestAccessToken({ prompt: "" });
+  });
+}
+function gdPickFolder(token){
+  return new Promise(res => {
+    const c = gdCfg();
+    const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+      .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes("application/vnd.google-apps.folder");
+    const b = new google.picker.PickerBuilder().addView(view).setOAuthToken(token).setDeveloperKey(c.apiKey)
+      .setLocale("ko").setTitle("문제 이미지가 있는 폴더를 고르세요")
+      .setCallback(d => {
+        if (d.action === google.picker.Action.PICKED) res(d.docs && d.docs[0] ? { id: d.docs[0].id, name: d.docs[0].name } : null);
+        else if (d.action === google.picker.Action.CANCEL) res(null);
+      });
+    if (c.appId) b.setAppId(c.appId);
+    b.build().setVisible(true);
+  });
+}
+async function gdFetch(url, token){
+  const r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (r.status === 401){ GD.token = null; throw { gd: "expired" }; }
+  if (r.status === 404) throw { gd: "notfound" };
+  if (!r.ok) throw { gd: "http", status: r.status };
+  return r;
+}
+async function gdList(token, folderId){
+  const out = []; let page = "";
+  const q = encodeURIComponent(`'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and mimeType contains 'image/'`);
+  do {
+    const r = await gdFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(id,name,mimeType)&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true${page ? "&pageToken=" + encodeURIComponent(page) : ""}`, token);
+    const j = await r.json(); out.push(...(j.files || [])); page = j.nextPageToken || "";
+  } while (page);
+  return out;
+}
+function gdMessage(err){
+  const c = err && err.gd;
+  if (c === "script") return "구글 드라이브 연결 도구를 불러오지 못했어요. 인터넷 연결을 확인하세요.";
+  if (c === "popup_closed") return "구글 로그인 창이 닫혔어요. 다시 눌러주세요.";
+  if (c === "popup_failed_to_open") return "로그인 창을 열지 못했어요. 버튼을 한 번 더 눌러주세요.";
+  if (c === "access_denied") return "드라이브 보기 권한을 허용해야 가져올 수 있어요.";
+  if (c === "expired") return "구글 로그인이 만료됐어요. 다시 눌러주세요.";
+  if (c === "notfound") return "폴더를 찾지 못했어요. 폴더를 다시 골라주세요.";
+  if (c === "http" && err.status === 403) return "드라이브에 접근하지 못했어요. 구글 클라우드에서 Google Drive API를 켰는지 확인하세요.";
+  if (c === "http") return `드라이브에서 오류가 났어요 (${err.status}). 잠시 뒤 다시 시도하세요.`;
+  return "드라이브에서 가져오지 못했어요.";
+}
+let gdBusy = false;
+async function gdImport(again){
+  if (gdBusy) return;
+  if (!gdConfigured()){ toast("설정에서 구글 드라이브 연결 정보를 먼저 넣어주세요."); location.hash = "settings"; return; }
+  const status = t => { const el = $("#gdStatus"); if (el) el.textContent = t; };
+  gdBusy = true;
+  try{
+    await gdPrepare();
+    const token = await gdToken();
+    const folder = again ? ls.get("gm-gdfolder") : await gdPickFolder(token);
+    if (!folder) return;
+    ls.set("gm-gdfolder", folder);
+    status(`'${folder.name}' 폴더 확인 중…`);
+    const files = (await gdList(token, folder.id)).sort((a, b) => natSort(a.name, b.name));
+    const known = new Set([...S.questions.values()].map(q => q.gid).concat(pending.map(p => p.gid)).filter(Boolean));
+    const fresh = files.filter(f => !known.has(f.id));
+    const skipped = files.length - fresh.length;
+    if (!files.length){ status(""); toast(`'${folder.name}' 폴더에 이미지가 없어요.`); return; }
+    if (!fresh.length){ status(""); toast(`'${folder.name}'의 이미지 ${files.length}장은 이미 모두 등록했거나 올려뒀어요.`); return; }
+    const got = new Array(fresh.length); let done = 0, failed = 0, next = 0;
+    const worker = async () => {
+      while (next < fresh.length){
+        const k = next++, f = fresh[k];
+        try {
+          const blob = await (await gdFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}?alt=media&supportsAllDrives=true`, token)).blob();
+          got[k] = new File([blob], f.name, { type: f.mimeType || blob.type });
+        } catch (err){ if (err && err.gd === "expired") throw err; failed++; }
+        done++; status(`'${folder.name}'에서 받는 중 ${done} / ${fresh.length}`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, fresh.length) }, worker));
+    got.forEach((file, k) => { if (file) pending.push({ file, name: file.name, url: URL.createObjectURL(file), answer: null, gid: fresh[k].id }); });
+    renderAdd();
+    const n = fresh.length - failed;
+    toast(`'${folder.name}'에서 ${n}장을 가져왔어요.` + (skipped ? ` 이미 있는 ${skipped}장은 건너뛰었어요.` : "") + (failed ? ` ${failed}장은 받지 못했어요.` : ""));
+  } catch (err){ status(""); toast(gdMessage(err)); }
+  finally { gdBusy = false; }
+}
+function gdSettingsHtml(){
+  const c = gdCfg();
+  return `<h2>구글 드라이브 연결</h2>
+    <div class="panel stack" style="gap:14px">
+      <p class="note" style="margin:0">「문제 등록」에서 구글 드라이브 폴더를 통째로 불러오려면 구글 클라우드에서 만든 연결 정보가 필요해요. 이 기기에만 저장되고 백업 파일에는 들어가지 않아요.</p>
+      <div class="grid2">
+        <div class="field"><label for="sGdClient">OAuth 클라이언트 ID</label><input type="text" id="sGdClient" value="${h(c.clientId || "")}" placeholder="…apps.googleusercontent.com" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label for="sGdKey">API 키</label><input type="text" id="sGdKey" value="${h(c.apiKey || "")}" placeholder="AIza…" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label for="sGdApp">프로젝트 번호 <span class="note">(선택)</span></label><input type="text" id="sGdApp" value="${h(c.appId || "")}" inputmode="numeric" autocomplete="off"></div>
+        <div class="field"><span class="lab">승인된 자바스크립트 원본에 넣을 주소</span><code class="origin">${h(location.origin)}</code></div>
+      </div>
+      <div class="tools"><button class="btn primary" id="sGdSave">저장</button>${c.clientId ? `<button class="btn ghost danger" id="sGdClear">연결 정보 지우기</button>` : ""}<span class="note">${gdConfigured() ? "연결 정보가 저장돼 있어요." : ""}</span></div>
+    </div>`;
+}
+function bindGdSettings(){
+  $("#sGdSave").onclick = () => {
+    const clientId = $("#sGdClient").value.trim(), apiKey = $("#sGdKey").value.trim(), appId = $("#sGdApp").value.replace(/\D/g, "");
+    if (!clientId || !apiKey){ toast("클라이언트 ID와 API 키를 모두 넣어주세요."); return; }
+    if (!/\.apps\.googleusercontent\.com$/.test(clientId)){ toast("클라이언트 ID는 .apps.googleusercontent.com으로 끝나야 해요."); return; }
+    ls.set("gm-gdrive", { clientId, apiKey, appId });
+    Object.assign(GD, { token: null, exp: 0, tc: null, tcId: "" });
+    renderSettings(); toast("구글 드라이브 연결 정보를 저장했어요.");
+  };
+  const clr = $("#sGdClear");
+  if (clr) clr.onclick = () => {
+    if (!confirm("구글 드라이브 연결 정보를 지울까요?")) return;
+    ls.del("gm-gdrive"); ls.del("gm-gdfolder");
+    try { if (GD.token && window.google && google.accounts) google.accounts.oauth2.revoke(GD.token, () => {}); } catch {}
+    Object.assign(GD, { token: null, exp: 0, tc: null, tcId: "" });
+    renderSettings(); toast("연결 정보를 지웠어요.");
+  };
+}
+
 /* ---------- settings view ---------- */
 const SUBJ_LISTS = {
   q: { key: "subjects", title: "기출 문제 과목", desc: "문제를 등록하고 시험을 보는 과목이에요. 시험, 문제 등록, 안키 카드 화면에 이 순서대로 나와요.", ph: "예: 형법" },
@@ -1938,6 +2104,7 @@ function renderSettings(){
     <p class="lede">과목을 추가하고 이름과 순서를 바꿀 수 있어요. 이름을 바꾸면 그 과목의 문제와 시험 기록도 함께 바뀌어요.</p>
     ${list("q")}
     ${list("m")}
+    ${gdSettingsHtml()}
     <h2>시험</h2>
     <div class="panel grid2">
       <div class="field"><label for="sChs">선지 개수</label><select id="sChs"><option ${st.choices == 4 ? "selected" : ""}>4</option><option ${st.choices == 5 ? "selected" : ""}>5</option></select>
@@ -1951,6 +2118,7 @@ function renderSettings(){
     const del = e.target.closest("[data-del]"); if (del) return deleteSubject(del.dataset.del, +del.dataset.i);
   };
   app.querySelectorAll(".sadd input").forEach(inp => inp.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); addSubjectTo(inp.id.slice(5)); } });
+  bindGdSettings();
   $("#sChs").onchange = e => { st.choices = +e.target.value; saveSubjSettings(); toast(`선지 개수를 ${st.choices}개로 바꿨어요.`); };
 }
 async function saveSubjSettings(){
