@@ -155,6 +155,9 @@ body.drawing.erasing .ink{cursor:cell}
 .pill.fl{background:var(--warn-soft);color:var(--warn)}
 .expl-wrap{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
 .expl-wrap summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--ink-2)}
+.eimg{margin-top:8px}
+.eimg img{display:block;max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:6px}
+.ebadge{font-size:12px;color:var(--ink-2);border:1px solid var(--line);border-radius:999px;padding:0 6px}
 .expl{white-space:pre-wrap;font-size:14px;line-height:1.75;color:var(--ink-2);margin-top:6px;max-width:72ch}
 #zoomExpl{padding:12px 16px 16px;margin:0;border-top:1px solid var(--line)}
 #zoomExpl:empty{display:none}
@@ -314,7 +317,7 @@ body.ndraw.erasing #nLive{cursor:cell}
   <button class="btn" id="mSubmit">제출</button>
 </div>
 
-<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><img id="zoomImg" alt=""></div><div id="zoomExpl" class="expl"></div></dialog>
+<dialog id="zoom"><button class="znav prev" id="zPrev" aria-label="이전 문제" hidden>‹</button><button class="znav next" id="zNext" aria-label="다음 문제" hidden>›</button><div class="dbar"><span id="zoomTitle" class="note"></span><span style="display:flex;align-items:center;gap:8px"><span id="zoomPos" class="note"></span><button class="btn ghost" onclick="document.getElementById('zoom').close()">닫기</button></span></div><div class="dimg"><img id="zoomImg" alt=""></div><div id="zoomEimg" class="eimg" hidden><img alt="해설 이미지"></div><div id="zoomExpl" class="expl"></div></dialog>
 <div class="toast" id="toast"></div>
 
 <script>/* SheetJS (Apache-2.0) */
@@ -362,9 +365,21 @@ async function compress(file){
 }
 
 /* ---------- storage: cloud (db + assets) with IndexedDB fallback ---------- */
-const S = { mode:null, questions:new Map(), settings:null, history:[], urls:new Map(), ankiExp:{} };
+const S = { mode:null, questions:new Map(), settings:null, history:[], urls:new Map(), eurls:new Map(), ankiExp:{} };
 const DEFAULT_SETTINGS = { subjects:["형사소송법","교정학"], manualSubjects:["국어","영어"], choices:4, count:25, minutes:25, weighted:true };
 const SHARDS = 8;
+
+/* ---------- explanation images (해설 이미지): eimg = cloud asset id, eblob = local Blob ---------- */
+const hasEimg = q => !!(q && (q.eimg || q.eblob));
+const eimgBlob = async q => q.eblob || (q.eimg ? await (await fetch(Store.eimgUrl(q))).blob() : null);
+// keep an existing explanation image when a question is rewritten (Store.put replaces the whole record)
+const explKeep = old => { const k = {}; if (old) for (const f of ["eimg", "eblob", "eimgAt", "egid", "egmod", "egname"]) if (old[f]) k[f] = old[f]; return k; };
+// egid/egmod/egname: the explanation image came from a Google Drive 해설 folder (not copied into the backup folder; restore re-downloads it)
+const egFields = (eg = {}) => ({ egid: eg.egid || "", egmod: eg.egmod || "", egname: eg.egname || "" });
+function explHtml(q, open){
+  if (!q.expl && !hasEimg(q)) return "";
+  return `<details class="expl-wrap" ${open ? "open" : ""}><summary>해설</summary>${hasEimg(q) ? `<div class="eimg"><img src="${h(Store.eimgUrl(q))}" alt="해설 이미지" loading="lazy"></div>` : ""}${q.expl ? `<div class="expl">${h(q.expl)}</div>` : ""}</details>`;
+}
 
 const Cloud = {
   async init(){
@@ -385,6 +400,14 @@ const Cloud = {
     try { const ax = await this.col.doc("ankiexp").get(); S.ankiExp = ax.exists ? ankiExpParse(ax.data().list) : {}; } catch { S.ankiExp = {}; }
   },
   img(q){ return "/_blob/" + q.img; },
+  eimgUrl(q){ return q.eimg ? "/_blob/" + q.eimg : ""; },
+  async setExpl(id, blob, eg){
+    const q = S.questions.get(id); if (!q) return;
+    const old = q.eimg;
+    const patch = { ...(blob ? { eimg: (await this.assets.upload(blob)).id } : { eimg: "" }), eimgAt: Date.now(), ...egFields(blob ? eg : null) };
+    await this.update(id, patch);
+    if (old && old !== patch.eimg) { try { await this.assets.delete(old); } catch {} }
+  },
   async add(blob, meta){
     const up = await this.assets.upload(blob);
     const id = "q" + uid36();
@@ -399,11 +422,13 @@ const Cloud = {
     const doc = { type:"q", shard: old && old.shard != null ? old.shard : Math.floor(Math.random()*SHARDS), img: up.id, ...meta };
     await this.col.doc(id).set(doc);
     if (old && old.img) { try { await this.assets.delete(old.img); } catch {} }
+    if (old && old.eimg && old.eimg !== doc.eimg) { try { await this.assets.delete(old.eimg); } catch {} }
     S.questions.set(id, {id, ...doc});
   },
   async remove(id){
     const q = S.questions.get(id);
     try { await this.assets.delete(q.img); } catch {}
+    if (q.eimg) { try { await this.assets.delete(q.eimg); } catch {} }
     await this.col.doc(id).delete(); S.questions.delete(id);
   },
   async saveSettings(){ await this.col.doc("settings").set(S.settings); },
@@ -431,6 +456,20 @@ const Local = {
     try { S.ankiExp = ankiExpParse(await this.tx("kv","readonly", s => s.get("ankiexp"))); } catch { S.ankiExp = {}; }
   },
   img(q){ if (!S.urls.has(q.id) && q.blob) S.urls.set(q.id, URL.createObjectURL(q.blob)); return S.urls.get(q.id) || ""; },
+  eimgUrl(q){
+    if (!q.eblob) return "";
+    const c = S.eurls.get(q.id); if (c && c.b === q.eblob) return c.u;
+    if (c) URL.revokeObjectURL(c.u);
+    const u = URL.createObjectURL(q.eblob); S.eurls.set(q.id, { b: q.eblob, u }); return u;
+  },
+  async setExpl(id, blob, eg){
+    const q = S.questions.get(id); if (!q) return;
+    if (blob) q.eblob = blob; else delete q.eblob;
+    q.eimgAt = Date.now();
+    const f = egFields(blob ? eg : null);
+    if (f.egid) Object.assign(q, f); else { delete q.egid; delete q.egmod; delete q.egname; }
+    await this.tx("q","readwrite", s => s.put(q));
+  },
   async add(blob, meta){ const id = "q" + uid36(); const q = {id, type:"q", blob, ...meta}; await this.tx("q","readwrite", s => s.put(q)); S.questions.set(id, q); },
   async update(id, patch){ const q = Object.assign(S.questions.get(id), patch); await this.tx("q","readwrite", s => s.put(q)); },
   async put(id, blob, meta){ const q = {id, type:"q", blob, ...meta}; await this.tx("q","readwrite", s => s.put(q)); if (S.urls.has(id)){ URL.revokeObjectURL(S.urls.get(id)); S.urls.delete(id); } S.questions.set(id, q); },
@@ -831,7 +870,7 @@ function renderResult(r = lastResult, back = null){
         ${q.tag ? `<span class="note">${h(q.tag)}</span>` : ""}
         <span class="note" style="margin-left:auto">${q.subject}</span></div>
       <div class="qimg" data-zoom="${x.id}" style="cursor:zoom-in"><img src="${h(Store.img(q))}" alt="${x.i+1}번 문제" loading="lazy"></div>
-      ${q.expl ? `<details class="expl-wrap" ${kind === "bad" ? "open" : ""}><summary>해설</summary><div class="expl">${h(q.expl)}</div></details>` : ""}
+      ${explHtml(q, kind === "bad")}
     </div>`;
   };
   $("#app").innerHTML = `
@@ -872,6 +911,7 @@ function showZoom(id){
   $("#zoomTitle").textContent = `${head} · ${q.subject}${q.tag ? " · " + q.tag : ""}`;
   $("#zoomPos").textContent = zoomList.length > 1 ? `${zoomPos+1} / ${zoomList.length}` : "";
   $("#zoomImg").src = Store.img(q); $("#zoomExpl").textContent = q.expl || "";
+  const ze = $("#zoomEimg"); ze.hidden = !hasEimg(q); $("img", ze).src = hasEimg(q) ? Store.eimgUrl(q) : "";
   $("#zPrev").hidden = $("#zNext").hidden = zoomList.length < 2;
   $("#zPrev").disabled = zoomPos <= 0;
   $("#zNext").disabled = zoomPos < 0 || zoomPos >= zoomList.length - 1;
@@ -909,6 +949,23 @@ function renderAdd(){
       <div id="xSummary">${importSummaryHtml()}</div>
       <div><button class="btn primary" id="xGo" ${importPlan().ready.length ? "" : "disabled"}>${importPlan().ready.length ? `${importPlan().ready.length}문제 등록` : "등록"}</button></div>
       <div class="progress hidden" id="xbar"><i></i></div>
+    </div>
+    <h2>해설 이미지 붙이기</h2>
+    <div class="panel stack">
+      <p class="note" style="margin:0">따로 만든 해설 이미지를 이미 등록한 문제에 붙여요. 문제 이미지와 파일 이름이 같으면 그 문제에 붙어요(확장자·대소문자와 이름 끝의 ‘_해설’은 따지지 않아요). 이름이 같은 문제가 없으면 ‘+’ 앞부분이 같은 문제들에 붙어요(예: 문제.png → 문제+보기1, 문제+보기2). 해설 이미지는 시험 중에는 보이지 않고 채점 결과·필기 화면·안키 카드 뒷면에 나와요. zip 파일도 풀지 않고 그대로 고를 수 있어요.</p>
+      <div class="srcbar">
+        <button class="btn" id="geAdd">구글 드라이브 해설 폴더 추가</button>
+        ${gdExplFolders().length ? `<button class="btn ghost" id="geSync">해설 폴더 다시 확인</button>` : ""}
+        <span class="note" id="geStatus"></span>
+      </div>
+      ${gdExplFolders().length ? `<div class="note" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">연결된 해설 폴더: ${gdExplFolders().map(f => `<span class="ebadge">${h(f.name)} <button class="btn ghost" data-germ="${h(f.id)}" style="padding:0 2px;font-size:12px" aria-label="${h(f.name)} 연결 해제">×</button></span>`).join("")}</div>` : ""}
+      <p class="note" style="margin:0">드라이브 폴더에서 붙인 해설 이미지는 원본이 드라이브에 있으니 백업 폴더에 따로 복사하지 않아요. 폴더에 이미지를 더 넣거나 고친 뒤 ‘다시 확인’을 누르면 새로 생기거나 바뀐 것만 받아요.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="note">이 기기에서 직접:</span><button class="btn" id="ePickDir">해설 폴더 선택</button><button class="btn" id="ePick">이미지·zip 파일 선택</button>${eImp.files.size ? `<button class="btn ghost" id="eClear">선택 취소</button>` : ""}<span class="note">${eImp.reading ? "읽는 중…" : eImp.files.size ? `해설 이미지 ${eImp.files.size}장 선택됨` : ""}</span></div>
+      <input type="file" id="eDir" webkitdirectory multiple class="hidden"><input type="file" id="eFiles" accept="image/*,.zip,application/zip" multiple class="hidden">
+      ${eImp.files.size ? `<label class="check"><input type="checkbox" id="eSkip" ${eImp.skipHave ? "checked" : ""}><span>이미 해설 이미지가 있는 문제는 건너뛰기 <span class="note">(끄면 새 이미지로 바꿔요)</span></span></label>` : ""}
+      <div id="eSummary">${explSummaryHtml()}</div>
+      <div><button class="btn primary" id="eGo" ${explPlan().map.size ? "" : "disabled"}>${explPlan().map.size ? `${explPlan().map.size}문제에 붙이기` : "붙이기"}</button></div>
+      <div class="progress hidden" id="ebar"><i></i></div>
     </div>
     <h2>이미지로 직접 등록</h2>
     <div class="panel stack">
@@ -966,6 +1023,15 @@ function renderAdd(){
   $("#iPick").onclick = () => $("#iFiles").click();
   $("#iDir").onchange = $("#iFiles").onchange = e => { addImportImages(e.target.files); e.target.value = ""; };
   $("#xGo").onclick = runImport;
+  $("#geAdd").onclick = gdExplAdd;
+  if ($("#geSync")) $("#geSync").onclick = gdExplSync;
+  document.querySelectorAll("[data-germ]").forEach(b => b.onclick = () => { if (confirm("이 폴더 연결을 해제할까요? 이미 붙인 해설 이미지는 그대로 남아요.")) gdExplRemove(b.dataset.germ); });
+  $("#ePickDir").onclick = () => $("#eDir").click();
+  $("#ePick").onclick = () => $("#eFiles").click();
+  $("#eDir").onchange = $("#eFiles").onchange = e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) addExplFiles(fs); };
+  if ($("#eClear")) $("#eClear").onclick = () => { eImp.files = new Map(); renderAdd(); };
+  if ($("#eSkip")) $("#eSkip").onchange = e => { eImp.skipHave = e.target.checked; renderAdd(); };
+  $("#eGo").onclick = runExplImport;
   const drop = $("#drop"), file = $("#file");
   drop.onclick = () => file.click();
   drop.onkeydown = e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); file.click(); } };
@@ -1052,6 +1118,8 @@ function renderManage(){
   if (f.kind === "unseen") list = list.filter(q => !q.n && !q.cardOnly);
   if (f.kind === "cardonly") list = list.filter(q => q.cardOnly);
   if (f.kind === "drive") list = list.filter(q => q.gid);
+  if (f.kind === "eimg") list = list.filter(hasEimg);
+  if (f.kind === "noeimg") list = list.filter(q => !hasEimg(q));
   const rate = q => q.n ? q.w / q.n : -1;
   list.sort(f.sort === "name" ? (a, b) => { const x = qFileName(a), y = qFileName(b); return x && y ? natSort(x, y) : x ? -1 : y ? 1 : (a.createdAt||0) - (b.createdAt||0); } : f.sort === "rate" ? (a, b) => rate(b) - rate(a) || b.n - a.n : f.sort === "old" ? (a, b) => (a.lastAt||0) - (b.lastAt||0) : (a, b) => (b.createdAt||0) - (a.createdAt||0));
   const shown = list.slice(0, 120);
@@ -1065,7 +1133,8 @@ function renderManage(){
       <div class="field"><label for="fk">보기</label><select id="fk">
         <option value="all">전체</option><option value="recent" ${f.kind==="recent"?"selected":""}>최근에 틀린 문제</option>
         <option value="wrong" ${f.kind==="wrong"?"selected":""}>한 번이라도 틀린 문제</option><option value="lucky" ${f.kind==="lucky"?"selected":""}>헷갈렸지만 맞은 문제</option>
-        <option value="unseen" ${f.kind==="unseen"?"selected":""}>안 푼 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option><option value="drive" ${f.kind==="drive"?"selected":""}>구글 드라이브에서 가져온 문제</option></select></div>
+        <option value="unseen" ${f.kind==="unseen"?"selected":""}>안 푼 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option><option value="drive" ${f.kind==="drive"?"selected":""}>구글 드라이브에서 가져온 문제</option>
+        <option value="eimg" ${f.kind==="eimg"?"selected":""}>해설 이미지 있는 문제</option><option value="noeimg" ${f.kind==="noeimg"?"selected":""}>해설 이미지 없는 문제</option></select></div>
       <div class="field"><label for="fo">정렬</label><select id="fo">
         <option value="new">최근 등록순</option><option value="rate" ${f.sort==="rate"?"selected":""}>오답률 높은 순</option><option value="old" ${f.sort==="old"?"selected":""}>오래 안 본 순</option><option value="name" ${f.sort==="name"?"selected":""}>이미지 파일 이름순</option></select></div>
       <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${shown.length}개 표시` : ""}</span>
@@ -1075,7 +1144,7 @@ function renderManage(){
       const r = rate(q);
       return `<div class="mcard" data-id="${q.id}">
         <div class="pthumb" data-zoom="${q.id}"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>${qFileName(q) ? `<div class="pname">${h(qFileName(q))}</div>` : ""}
-        <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span></div>
+        <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span>${hasEimg(q) ? `<span><span class="ebadge">해설 이미지</span> <button class="btn ghost danger" data-edel="${q.id}" style="padding:0 4px;font-size:12px">떼기</button></span>` : ""}</div>
         <div class="mrow"><span>정답 <select data-ans="${q.id}">${q.cardOnly ? `<option value="" selected>없음</option>` : ""}${Array.from({length: q.choices || st.choices}, (_, c) => `<option value="${c+1}" ${q.answer===c+1?"selected":""}>${CIRC[c]}</option>`).join("")}</select></span>
           ${answersOf(q).length > 1 ? `<span class="note">${q.noAnswer ? "정답 없음" : "복수정답 " + ansLabel(q)}</span>` : ""}<span class="rate${r >= 0.5 ? " hi" : ""}">${q.cardOnly ? `<span class="note">시험에 안 나옴</span>` : q.n ? `${q.n}회 중 ${q.w}회 틀림` : "안 푼 문제"}</span></div>
         <div class="mrow"><span>${q.lastAt ? Math.floor((now - q.lastAt)/dayMs) + "일 전" : ""}${q.last === 2 ? " · 헷갈림" : q.last === 0 ? " · 최근 틀림" : ""}</span><span><a class="btn ghost" href="#note-${q.id}" style="padding:2px 6px">필기</a><button class="btn ghost danger" data-del="${q.id}" style="padding:2px 6px">삭제</button></span></div>
@@ -1111,6 +1180,12 @@ function renderManage(){
   const g = $("#qgrid"); if (!g) return;
   g.onclick = async e => {
     const z = e.target.closest("[data-zoom]"); if (z) return zoom(z.dataset.zoom);
+    const ed = e.target.closest("[data-edel]");
+    if (ed){
+      if (!confirm("이 문제에서 해설 이미지를 뗄까요? 문제와 풀이 기록은 그대로 남아요.")) return;
+      try { await Store.setExpl(ed.dataset.edel, null); abWrite("full"); toast("해설 이미지를 뗐어요."); } catch { toast("해설 이미지를 떼지 못했어요."); }
+      renderManage(); return;
+    }
     const d = e.target.closest("[data-del]");
     if (d && confirm("이 문제를 지울까요? 되돌릴 수 없어요.")){
       try { await Store.remove(d.dataset.del); toast("삭제했어요."); abWrite("records"); renderManage(); } catch { toast("삭제하지 못했어요."); }
@@ -1130,7 +1205,7 @@ async function removeMany(ids, onProgress){
       const chunk = ids.slice(i, i + 200);
       try{
         await Local.tx("q", "readwrite", st => { chunk.forEach(id => st.delete(id)); });
-        chunk.forEach(id => { S.questions.delete(id); if (S.urls.has(id)){ URL.revokeObjectURL(S.urls.get(id)); S.urls.delete(id); } });
+        chunk.forEach(id => { S.questions.delete(id); if (S.urls.has(id)){ URL.revokeObjectURL(S.urls.get(id)); S.urls.delete(id); } if (S.eurls.has(id)){ URL.revokeObjectURL(S.eurls.get(id).u); S.eurls.delete(id); } });
       } catch { failed += chunk.length; }
       if (onProgress) onProgress(Math.min(i + 200, ids.length), ids.length);
     }
@@ -1343,7 +1418,9 @@ const ankiExpParse = str => { const m = {}; String(str || "").split("\n").forEac
 const ankiExpPack = () => Object.keys(S.ankiExp).filter(id => S.questions.has(id)).map(id => id + "\t" + S.ankiExp[id]).join("\n");
 const ankiSig = q => fnv(JSON.stringify([
   q.img || (q.blob ? [q.blob.size, q.blob.type] : null), q.imgAt || 0, q.createdAt || 0, qFileName(q),
-  q.note || null, ansLabel(q), q.expl || "", q.subject || "", q.tag || "", !!q.cardOnly
+  q.note || null, ansLabel(q), q.expl || "", q.subject || "", q.tag || "", !!q.cardOnly,
+  // only cards that have an explanation image get the extra entry, so existing signatures stay the same
+  ...(hasEimg(q) ? [q.eimg || [q.eblob.size, q.eblob.type], q.eimgAt || 0] : [])
 ]));
 const ankiChanged = q => S.ankiExp[q.id] !== ankiSig(q);
 function ankiExportPool(opt){
@@ -1450,7 +1527,7 @@ function renderNote(){
       <canvas class="ncv" id="nCv"></canvas><canvas class="ncv" id="nLive"></canvas>
     </div>
     <p class="note" style="margin-top:10px">S펜 옆 버튼을 누른 채로 그으면 지워져요. 쓴 내용은 자동으로 저장돼요.</p>
-    ${q.expl ? `<details class="expl-wrap"><summary>해설</summary><div class="expl">${h(q.expl)}</div></details>` : ""}`;
+    ${explHtml(q, false)}`;
   const go = d => { const j = pos + d; if (j >= 0 && j < cardsOrder.length) location.replace("#note-" + encodeURIComponent(cardsOrder[j])); };
   $("#nPrev").onclick = () => go(-1);
   $("#nNext").onclick = () => go(1);
@@ -1625,11 +1702,23 @@ async function exportAnki(opt){
         bName = base ? uniq(base + "_풀이.jpg") : `gichul_${q.id}_a_${crc32(back).toString(16)}.jpg`;
         media.push({ name: bName, data: back });
       }
+      let eName = "";
+      if (hasEimg(q)){
+        try{
+          const eb = await eimgBlob(q), data = new Uint8Array(await eb.arrayBuffer());
+          const ext = (/(png|jpe?g|webp|gif)/.exec(eb.type || "") || ["png"])[0].replace("jpeg", "jpg");
+          eName = base ? uniq(base + "_해설." + ext) : `gichul_${q.id}_e_${crc32(data).toString(16)}.${ext}`;
+          media.push({ name: eName, data });
+        } catch { eName = ""; }
+      }
+      // back of the card: the explanation image replaces the plain question image; with handwriting it goes into the 해설 field
+      if (eName && !hasInk(q)) bName = eName;
+      const explField = (eName && hasInk(q) ? `<img src="${h(eName)}">` : "") + h(q.expl || "").replace(/\n/g, "<br>");
       const src = q.subject + (q.tag ? " · " + q.tag : "");
       notes.push({
         guid: "gichul-" + q.id,
         deck: String(q.subject).replace(/::/g, ":").trim() || "기출",
-        fields: [`<img src="${h(fName)}">`, `<img src="${h(bName)}">`, q.cardOnly ? "" : ansLabel(q), h(q.expl || "").replace(/\n/g, "<br>"), h(src)],
+        fields: [`<img src="${h(fName)}">`, `<img src="${h(bName)}">`, q.cardOnly ? "" : ansLabel(q), explField, h(src)],
         tags: ["기출", String(q.subject).replace(/\s+/g, "_")],
         sort: fName,
         mod: sec   // always newer than what Anki has, so re-imported notes really get updated (answer/explanation edits included)
@@ -1722,7 +1811,7 @@ async function runImport(){
       const blob = await compress(xImp.images.get(r.base));
       await Store.put(id, blob, {
         subject, answer: r.answers[0], answers: r.answers, noAnswer: r.noAnswer, choices: r.choices,
-        tag: r.tag, expl: r.expl, no: r.no, src: r.base,
+        ...explKeep(old), tag: r.tag, expl: r.expl, no: r.no, src: r.base,
         createdAt: old ? old.createdAt : t0 + i,
         n: old ? old.n || 0 : 0, w: old ? old.w || 0 : 0, last: old ? old.last ?? null : null, lastAt: old ? old.lastAt || 0 : 0
       });
@@ -1736,6 +1825,131 @@ async function runImport(){
   }
   toast(failed ? `${done - failed}문제 등록, ${failed}문제 실패` : `${done}문제를 등록했어요.`);
   xImp.rows = null; xImp.fileName = ""; xImp.images = new Map();
+  if (done - failed > 0) abWrite("full");
+  renderAdd();
+}
+
+/* ---------- explanation image import ---------- */
+const eImp = { files: new Map(), reading: false, skipHave: false };
+const fileKey = name => String(name || "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "").normalize("NFC").trim().toLowerCase();
+const explKey = name => fileKey(name).replace(/[\s_-]*해설$/, "");
+// excel imports keep the name without extension in src; other imports keep the original file name
+const qKey = q => q.gname || q.fname ? fileKey(q.gname || q.fname) : String(q.src || "").normalize("NFC").trim().toLowerCase();
+const IMG_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+const junkName = n => /(^|[\\/])(__MACOSX|\.)/.test(n) || /(^|[\\/])\._/.test(n);
+const mimeOf = n => ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", bmp: "image/bmp" })[(/\.([a-z]+)$/i.exec(n) || [, ""])[1].toLowerCase()] || "";
+// minimal zip reader (stored / deflate), reads only the entries it needs from the file
+async function zipEntries(file){
+  const tailLen = Math.min(file.size, 65557);
+  const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
+  let eocd = -1;
+  for (let i = tailLen - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  if (eocd < 0) throw new Error("zip");
+  const count = tail.getUint16(eocd + 10, true), cdSize = tail.getUint32(eocd + 12, true), cdOff = tail.getUint32(eocd + 16, true);
+  const buf = await file.slice(cdOff, cdOff + cdSize).arrayBuffer(), cd = new DataView(buf);
+  const utf8 = new TextDecoder("utf-8"), strict = new TextDecoder("utf-8", { fatal: true });
+  let kr = utf8; try { kr = new TextDecoder("euc-kr"); } catch {}
+  const out = []; let p = 0;
+  for (let k = 0; k < count && p + 46 <= cd.byteLength; k++){
+    if (cd.getUint32(p, true) !== 0x02014b50) break;
+    const flag = cd.getUint16(p + 8, true), method = cd.getUint16(p + 10, true), csize = cd.getUint32(p + 20, true);
+    const nlen = cd.getUint16(p + 28, true), xlen = cd.getUint16(p + 30, true), clen = cd.getUint16(p + 32, true), loff = cd.getUint32(p + 42, true);
+    const nb = new Uint8Array(buf, p + 46, nlen);
+    let name; if (flag & 0x800) name = utf8.decode(nb); else { try { name = strict.decode(nb); } catch { name = kr.decode(nb); } }   // Windows zips name files in CP949
+    out.push({ name, method, csize, loff });
+    p += 46 + nlen + xlen + clen;
+  }
+  return out;
+}
+async function zipRead(file, e){
+  const lh = new DataView(await file.slice(e.loff, e.loff + 30).arrayBuffer());
+  const start = e.loff + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+  const raw = file.slice(start, start + e.csize);
+  const type = mimeOf(e.name);
+  if (e.method === 0) return new Blob([raw], { type });
+  if (e.method === 8) return new Blob([await new Response(raw.stream().pipeThrough(new DecompressionStream("deflate-raw"))).blob()], { type });
+  throw new Error("zip method " + e.method);
+}
+async function addExplFiles(list){
+  eImp.reading = true; renderAdd();
+  let n = 0, bad = 0;
+  for (const f of list){
+    if (/\.zip$/i.test(f.name)){
+      try{
+        for (const e of await zipEntries(f)){
+          if (!IMG_RE.test(e.name) || junkName(e.name) || !e.csize) continue;
+          eImp.files.set(explKey(e.name), { name: e.name.split(/[\\/]/).pop(), get: () => zipRead(f, e) }); n++;
+        }
+      } catch { bad++; }
+    } else if ((IMG_RE.test(f.name) || (f.type || "").startsWith("image/")) && !junkName(f.name)){
+      eImp.files.set(explKey(f.name), { name: f.name, get: async () => f }); n++;
+    }
+  }
+  eImp.reading = false;
+  if (bad) toast(`zip ${bad}개를 읽지 못했어요.`);
+  else if (!n) toast("이미지를 찾지 못했어요.");
+  renderAdd();
+}
+function explPlan(){ return explMatch(eImp.files, eImp.skipHave); }
+// files: Map(key -> entry). Returns which question gets which entry.
+function explMatch(files, skipHave){
+  const map = new Map(), unmatched = [];
+  if (!files.size) return { map, unmatched, prefixN: 0, have: 0, skipped: 0 };
+  const byKey = new Map(), byPre = new Map();
+  const push = (m, k, q) => { if (!m.has(k)) m.set(k, []); m.get(k).push(q); };
+  for (const q of S.questions.values()){
+    const k = qKey(q); if (!k) continue;
+    push(byKey, k, q);
+    const i = k.indexOf("+"); if (i > 0) push(byPre, k.slice(0, i).trim(), q);
+  }
+  const exact = new Set();
+  for (const [k, ent] of files){
+    const ex = byKey.get(k);
+    if (ex){ ex.forEach(q => { map.set(q.id, ent); exact.add(q.id); }); continue; }
+    const pre = byPre.get(k);
+    if (pre){ pre.forEach(q => { if (!exact.has(q.id)) map.set(q.id, ent); }); continue; }
+    unmatched.push(ent.name);
+  }
+  let skipped = 0;
+  if (skipHave) for (const id of [...map.keys()]) if (hasEimg(S.questions.get(id))){ map.delete(id); skipped++; }
+  const ids = [...map.keys()];
+  return { map, unmatched, prefixN: ids.filter(id => !exact.has(id)).length, have: ids.filter(id => hasEimg(S.questions.get(id))).length, skipped };
+}
+function explSummaryHtml(){
+  if (!eImp.files.size) return "";
+  const { map, unmatched, prefixN, have, skipped } = explPlan();
+  const lines = [`해설 이미지 ${eImp.files.size}장 → <b>${map.size}문제</b>에 붙일 수 있어요`];
+  if (prefixN) lines.push(`그중 ${prefixN}문제는 ‘+’ 앞 이름이 같아서 붙여요`);
+  if (have) lines.push(`이미 해설 이미지가 있는 ${have}문제는 새 이미지로 바뀌어요`);
+  if (skipped) lines.push(`이미 해설 이미지가 있는 ${skipped}문제는 건너뛰어요`);
+  if (unmatched.length) lines.push(`<span style="color:var(--warn)">맞는 문제를 못 찾은 ${unmatched.length}장: ${unmatched.slice(0, 5).map(h).join(", ")}${unmatched.length > 5 ? " 외" : ""}</span>`);
+  return `<div class="note" style="line-height:1.9">${lines.join("<br>")}</div>`;
+}
+// map: question id -> entry. Each image is read once and given to all of its questions, then let go (keeps memory low on big folders).
+async function attachExpl(map, onProgress){
+  const groups = new Map();
+  for (const [id, ent] of map){ if (!groups.has(ent)) groups.set(ent, []); groups.get(ent).push(id); }
+  let done = 0, failed = 0, stop = false;
+  await gdPool([...groups], 3, async ([ent, ids]) => {
+    if (stop) return;
+    let blob = null;
+    try { blob = await compress(await ent.get()); }
+    catch (err){ if (err && err.gd === "expired") throw err; }
+    for (const id of ids){
+      if (stop) break;
+      try { if (!blob) throw 0; await Store.setExpl(id, blob, ent.eg); }
+      catch (err){ failed++; if (err && (err.code === "quota_exceeded" || err.name === "QuotaExceededError")) stop = true; }
+      done++; if (onProgress) onProgress(done, map.size);
+    }
+  });
+  return { done, failed, stop };
+}
+async function runExplImport(){
+  const plan = explPlan(); if (!plan.map.size) return;
+  const btn = $("#eGo"), bar = $("#ebar"); btn.disabled = true; bar.classList.remove("hidden");
+  const { done, failed, stop } = await attachExpl(plan.map, (i, n) => { bar.firstElementChild.style.width = (i / n * 100) + "%"; btn.textContent = `붙이는 중 ${i} / ${n}`; });
+  toast(stop ? "저장 공간이 가득 찼어요. 지금까지 붙인 해설 이미지는 저장됐어요." : failed ? `${done - failed}문제에 붙였고 ${failed}문제는 실패했어요.` : `${done}문제에 해설 이미지를 붙였어요.`);
+  eImp.files = new Map();
   if (done - failed > 0) abWrite("full");
   renderAdd();
 }
@@ -1771,8 +1985,9 @@ async function buildFullBackup(onProgress){
   for (let i = 0; i < qs.length; i++){
     const q = qs[i];
     const blob = q.blob || await (await fetch(Store.img(q))).blob();
-    const { blob: _b, img: _i, shard: _s, ...meta } = q;
-    parts.push((i ? "," : "") + JSON.stringify({ ...meta, image: await blobToDataURL(blob) }));
+    const { blob: _b, img: _i, shard: _s, eblob: _e, eimg: _ei, ...meta } = q;
+    let eb = null; if (hasEimg(q)) { try { eb = await eimgBlob(q); } catch {} }
+    parts.push((i ? "," : "") + JSON.stringify({ ...meta, image: await blobToDataURL(blob), ...(eb ? { explImage: await blobToDataURL(eb) } : {}) }));
     // move finished text out of JS memory into the browser's blob storage every few images
     if (parts.length >= 8){ out = new Blob([out, ...parts]); parts = []; }
     if (onProgress && i % 10 === 0) onProgress(i + 1, qs.length);
@@ -1781,7 +1996,7 @@ async function buildFullBackup(onProgress){
   return new Blob([out, ...parts], { type: "application/json" });
 }
 function buildRecordsBackup(){
-  const qs = [...S.questions.values()].map(({ blob, img, shard, ...m }) => m);
+  const qs = [...S.questions.values()].map(({ blob, img, shard, eblob, eimg, ...m }) => m);
   return new Blob([JSON.stringify({ app: "gichul-mock", kind: "records", version: 1, exportedAt: Date.now(), settings: S.settings, history: S.history, questions: qs })], { type: "application/json" });
 }
 async function exportBackup(btn){
@@ -1838,11 +2053,16 @@ async function importData(data, ask = true){
   let done = 0, failed = 0;
   await gdPool(data.questions, 3, async q => {
     try{
-      const { id, image, ...meta } = q;
-      if (image === null && S.questions.has(id)){ await Store.update(id, meta); }
+      const { id, image, explImage, ...meta } = q;
+      const cur = S.questions.get(id);
+      if (image === null && cur){ await Store.update(id, meta); }
       else {
         const blob = typeof image === "function" ? await image() : image instanceof Blob ? image : await (await fetch(image)).blob();
-        await Store.put(id, blob, meta);
+        await Store.put(id, blob, { ...(explImage ? {} : explKeep(cur)), ...meta });
+      }
+      if (explImage){
+        const eb = typeof explImage === "function" ? await explImage() : explImage instanceof Blob ? explImage : await (await fetch(explImage)).blob();
+        await Store.setExpl(id, eb, meta.egid ? meta : null);
       }
     } catch { failed++; }
     done++;
@@ -1876,14 +2096,22 @@ async function abWriteFull(){
   for await (const [name, hd] of dir.entries()) if (hd.kind === "file") have.add(name);
   const keep = new Set(), list = [];
   for (const q of [...S.questions.values()]){
-    const { blob: _b, img: _i, shard: _s, ...meta } = q;
+    const { blob: _b, img: _i, shard: _s, eblob: _e, eimg: _ei, ...meta } = q;
+    // explanation images never live in Drive, so they are always written to the folder
+    const extra = {};
+    if (hasEimg(q) && !q.egid){
+      const eb = await eimgBlob(q);
+      const en = abImgName({ id: q.id + "#e", imgAt: q.eimgAt || 0, createdAt: q.createdAt || 0 }, eb);
+      if (!have.has(en)) await writeFile(dir, en, eb);
+      keep.add(en); extra.explImageFile = en;
+    }
     // came from a Google Drive folder: the original stays there, so only its info is backed up (gid) and restore re-downloads it
-    if (q.gid){ list.push({ ...meta, imageFile: null }); continue; }
+    if (q.gid){ list.push({ ...meta, ...extra, imageFile: null }); continue; }
     const blob = q.blob || await (await fetch(Store.img(q))).blob();
     const name = abImgName(q, blob);
     if (!have.has(name)) await writeFile(dir, name, blob);
     keep.add(name);
-    list.push({ ...meta, imageFile: name });
+    list.push({ ...meta, ...extra, imageFile: name });
   }
   const gd = gdCfg();
   await writeFile(AB.dir, AB_LIST, new Blob([JSON.stringify({ app: "gichul-mock", kind: "full", version: 2, exportedAt: Date.now(), settings: S.settings, history: S.history, ankiExp: ankiExpPack(),
@@ -1975,7 +2203,7 @@ async function abRestore(){
   if (full && Array.isArray(full.questions)){
     let dir = null; try { dir = await AB.dir.getDirectoryHandle(AB_IMGDIR); } catch {}
     let token = null;
-    if (full.questions.some(q => !q.imageFile && q.gid)){
+    if (full.questions.some(q => (!q.imageFile && q.gid) || (q.egid && !q.explImageFile && !hasEimg(S.questions.get(q.id))))){
       // these images live in the user's Google Drive folder: sign in first, and restore nothing if that fails,
       // so a half-finished restore can't be backed up over the complete list
       if (!gdConfigured() && full.gdrive && full.gdrive.clientId) ls.set("gm-gdrive", full.gdrive);
@@ -1984,7 +2212,10 @@ async function abRestore(){
       catch (err){ toast(gdMessage(err) + " 연결되면 「복구」를 다시 눌러주세요."); refreshBackupUI(); return; }
     }
     AB.hold = true; try { await Local.tx("kv", "readwrite", st => st.put(true, "abHold")); } catch {}
-    const qs = full.questions.map(({ imageFile, ...q }) => ({ ...q,
+    const qs = full.questions.map(({ imageFile, explImageFile, ...q }) => ({ ...q,
+      ...(hasEimg(S.questions.get(q.id)) ? {}   // already restored in an earlier, interrupted run
+         : explImageFile && dir ? { explImage: async () => (await (await dir.getFileHandle(explImageFile)).getFile()) }
+         : q.egid ? { explImage: async () => compress(await gdDownload({ id: q.egid, name: q.egname || "image" }, await gdToken())) } : {}),
       image: S.questions.has(q.id) && S.questions.get(q.id).blob ? null   // already restored in an earlier, interrupted run
            : imageFile ? async () => (await (await dir.getFileHandle(imageFile)).getFile())
                        : async () => compress(await gdDownload({ id: q.gid, name: q.gname || "image" }, await gdToken())) }));   // gdToken renews an expired sign-in
@@ -2080,18 +2311,22 @@ function gdToken(){
     GD.tc.requestAccessToken({ prompt: "" });
   });
 }
-function gdPickFolder(token){
+function gdPickFolder(token, opt = {}){
   return new Promise(res => {
     const c = gdCfg();
     const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
       .setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes("application/vnd.google-apps.folder");
     const b = new google.picker.PickerBuilder().addView(view).setOAuthToken(token).setDeveloperKey(c.apiKey)
-      .setLocale("ko").setTitle("문제 이미지가 있는 폴더를 고르세요")
+      .setLocale("ko").setTitle(opt.title || "문제 이미지가 있는 폴더를 고르세요")
       .setCallback(d => {
-        if (d.action === google.picker.Action.PICKED) res(d.docs && d.docs[0] ? { id: d.docs[0].id, name: d.docs[0].name } : null);
+        if (d.action === google.picker.Action.PICKED){
+          const docs = (d.docs || []).map(x => ({ id: x.id, name: x.name }));
+          res(opt.multi ? docs : docs[0] || null);
+        }
         else if (d.action === google.picker.Action.CANCEL) res(null);
       });
     if (c.appId) b.setAppId(c.appId);
+    if (opt.multi) b.enableFeature(google.picker.Feature.MULTISELECT_ENABLED);
     b.build().setVisible(true);
   });
 }
@@ -2235,6 +2470,70 @@ async function gdImport(again){
     status("");
     if (currentView() === "add") renderAdd();
     toast(err && err.gd === "quota" ? "저장 공간이 가득 찼어요. 지금까지 받은 이미지는 저장됐어요." : gdMessage(err));
+  } finally {
+    gdBusy = false;
+    try { if (lock) await lock.release(); } catch {}
+  }
+}
+/* ----- google drive: 해설 folders ----- */
+const gdExplFolders = () => ls.get("gm-gdexpl") || [];
+async function gdExplAdd(){
+  if (gdBusy) return;
+  if (!gdConfigured()){ toast("설정에서 구글 드라이브 연결 정보를 먼저 넣어주세요."); location.hash = "settings"; return; }
+  try{
+    await gdPrepare();
+    const picked = await gdPickFolder(await gdToken(), { title: "해설 이미지 폴더를 고르세요 (여러 개 가능)", multi: true });
+    if (!picked || !picked.length) return;
+    const list = gdExplFolders();
+    picked.forEach(f => { if (!list.some(x => x.id === f.id)) list.push(f); });
+    ls.set("gm-gdexpl", list);
+  } catch (err){ toast(gdMessage(err)); return; }
+  await gdExplSync();
+}
+function gdExplRemove(id){
+  ls.set("gm-gdexpl", gdExplFolders().filter(f => f.id !== id));
+  renderAdd();
+}
+// Looks through every saved 해설 folder and attaches images that are new or changed since the last check.
+async function gdExplSync(){
+  if (gdBusy) return;
+  const folders = gdExplFolders(); if (!folders.length) return;
+  if (!gdConfigured()){ toast("설정에서 구글 드라이브 연결 정보를 먼저 넣어주세요."); location.hash = "settings"; return; }
+  const status = t => { const el = $("#geStatus"); if (el) el.textContent = t; };
+  gdBusy = true; let lock = null;
+  try{
+    await gdPrepare();
+    const token = await gdToken();
+    try { if (navigator.wakeLock) lock = await navigator.wakeLock.request("screen"); } catch {}
+    const files = new Map(), missing = [];
+    for (const folder of folders){
+      status(`'${folder.name}' 확인 중…`);
+      let list;
+      try { list = await gdList(token, folder.id); }
+      catch (err){ if (err && err.gd === "notfound"){ missing.push(folder.name); continue; } throw err; }
+      for (const f of list){
+        if (junkName(f.name)) continue;
+        const eg = { egid: f.id, egmod: f.md5Checksum || f.modifiedTime || "", egname: f.name };
+        files.set(explKey(f.name), { name: f.name, eg, get: async () => gdDownload(f, await gdToken()) });   // gdToken renews an expired sign-in
+      }
+    }
+    const plan = explMatch(files, false);
+    // skip questions that already have this exact Drive file
+    for (const [id, ent] of [...plan.map]){ const q = S.questions.get(id); if (q && q.egid === ent.eg.egid && q.egmod === ent.eg.egmod && hasEimg(q)) plan.map.delete(id); }
+    let res = { done: 0, failed: 0, stop: false };
+    if (plan.map.size) res = await attachExpl(plan.map, (i, n) => status(`해설 이미지 받는 중 ${i} / ${n}`));
+    status("");
+    if (res.done - res.failed > 0) abWrite("full");
+    if (currentView() === "add") renderAdd();
+    const parts = [];
+    if (res.done - res.failed) parts.push(`${res.done - res.failed}문제에 해설 이미지를 붙였어요`);
+    if (res.failed) parts.push(`${res.failed}문제는 실패했어요`);
+    if (plan.unmatched.length) parts.push(`맞는 문제가 없는 이미지 ${plan.unmatched.length}장은 건너뛰었어요`);
+    if (missing.length) parts.push(`폴더를 찾지 못했어요: ${missing.join(", ")}`);
+    toast(res.stop ? "저장 공간이 가득 찼어요. 지금까지 붙인 해설 이미지는 저장됐어요."
+      : parts.length ? parts.join(", ") + "." : `해설 폴더 ${folders.length}개에 새로 붙일 이미지가 없어요.`);
+  } catch (err){
+    status(""); toast(gdMessage(err));
   } finally {
     gdBusy = false;
     try { if (lock) await lock.release(); } catch {}
