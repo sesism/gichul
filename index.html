@@ -291,6 +291,7 @@ a.mcard:hover{border-color:var(--pencil)}
 .inkbar.ntop{position:sticky;top:calc(env(safe-area-inset-top,0px) + 56px);left:auto;bottom:auto;width:max-content;max-width:100%;overflow-x:auto;margin:0 0 12px}
 body.ndraw #nLive{pointer-events:auto;touch-action:none;cursor:crosshair}
 body.ndraw.erasing #nLive{cursor:cell}
+html.nozoom,html.nozoom body{touch-action:pan-x pan-y}   /* note page: no pinch / double-tap zoom */
 @media print{.ncv{display:none}}
 @media (prefers-reduced-motion:reduce){*{transition:none !important;scroll-behavior:auto !important}}
 </style>
@@ -1560,6 +1561,7 @@ function renderNote(){
     else if (b.dataset.na === "clear" && noteEd.strokes.length && confirm(noteEd.side === "e" ? "해설 이미지의 필기를 모두 지울까요?" : "이 문제의 필기를 모두 지울까요?")){ notePush(); noteEd.strokes = []; noteRedraw(); noteChanged(); }
   };
   setNoteTool(noteTool);
+  setNoZoom(true);
   setupNoteCanvas();
   updateSaveLabel();
 }
@@ -1603,8 +1605,16 @@ function setupNoteCanvas(){
     const keep = noteEd.strokes.filter(s => { for (let k = 0; k < s.p.length; k += 2){ const dx = s.p[k] - pt.x, dy = s.p[k+1] - pt.y; if (dx*dx + dy*dy < r2) return false; } return true; });
     if (keep.length !== noteEd.strokes.length){ noteEd.strokes = keep; cur.erased = true; noteRedraw(); }
   };
+  // a second finger turns the touch into a page swipe: drop whatever the first finger started
+  noteEd.cancelInk = () => {
+    if (!cur) return;
+    if (cur.st) lctx.clearRect(0, 0, live.width, live.height);
+    else if (cur.erase){ const prev = noteEd.undo.pop(); if (cur.erased && prev){ noteEd.strokes = prev; noteRedraw(); } }
+    cur = null;
+  };
   live.addEventListener("pointerdown", e => {
     if (!noteTool || (e.button > 0 && e.pointerType !== "pen")) return;
+    if (e.pointerType === "touch" && swipe.block){ e.preventDefault(); return; }
     if (e.pointerType === "pen" && !penOnly){ penOnly = true; ls.set("gm-penonly", true); const f = $("#nFinger"); if (f) f.checked = false; toast("S펜이 감지됐어요. 이제 손가락으로는 스크롤하고 펜으로만 써요."); }
     e.preventDefault(); try { live.setPointerCapture(e.pointerId); } catch {}
     if (penOnly && e.pointerType === "touch"){ cur = { pan: true, y: e.clientY }; return; }
@@ -1651,11 +1661,48 @@ async function persistNote(ed = noteEd){
 async function leaveNote(){
   const ed = noteEd; noteEd = null;
   document.body.classList.remove("ndraw", "erasing");
+  setNoZoom(false);
   if (!ed) return;
   await persistNote(ed);
   if (ed.touched) abWrite("records");
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && noteEd) persistNote(); });
+/* note page: no zoom, two-finger swipe left = next card, right = previous card */
+const VIEWPORT = "width=device-width, initial-scale=1, viewport-fit=cover";
+function setNoZoom(on){
+  document.documentElement.classList.toggle("nozoom", on);
+  const m = document.querySelector('meta[name="viewport"]');
+  const want = on ? VIEWPORT + ", maximum-scale=1, user-scalable=no" : VIEWPORT;
+  if (m && m.content !== want) m.content = want;
+}
+const swipe = { on: false, block: false, x0: 0, y0: 0, x: 0, y: 0 };
+const midOf = t => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+document.addEventListener("touchstart", e => {
+  if (currentView() !== "note" || !noteEd) return;
+  if (e.touches.length === 2){
+    if (noteEd.cancelInk) noteEd.cancelInk();
+    const m = midOf(e.touches);
+    Object.assign(swipe, { on: true, block: true, x0: m.x, y0: m.y, x: m.x, y: m.y });
+    if (e.cancelable) e.preventDefault();
+  } else if (e.touches.length > 2){ swipe.on = false; swipe.block = true; }
+}, { passive: false });
+document.addEventListener("touchmove", e => {
+  if (!swipe.block || currentView() !== "note") return;
+  if (e.cancelable) e.preventDefault();   // stops pinch-zoom and scrolling while two fingers are down
+  if (swipe.on && e.touches.length === 2){ const m = midOf(e.touches); swipe.x = m.x; swipe.y = m.y; }
+}, { passive: false });
+const swipeEnd = e => {
+  if (!swipe.block) return;
+  if (swipe.on && e.touches.length < 2){
+    swipe.on = false;
+    const dx = swipe.x - swipe.x0, dy = swipe.y - swipe.y0;
+    if (noteEd && noteEd.go && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) noteEd.go(dx < 0 ? 1 : -1);
+  }
+  if (e.touches.length === 0) swipe.block = false;
+};
+document.addEventListener("touchend", swipeEnd);
+document.addEventListener("touchcancel", swipeEnd);
+document.addEventListener("gesturestart", e => { if (currentView() === "note") e.preventDefault(); });   // iOS Safari pinch
 document.addEventListener("keydown", e => {
   if (currentView() !== "note" || !noteEd) return;
   if (e.target.matches("input,textarea,select") || e.metaKey || e.ctrlKey || e.altKey) return;
