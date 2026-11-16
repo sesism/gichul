@@ -1426,7 +1426,8 @@ const ankiSig = q => fnv(JSON.stringify([
   q.img || (q.blob ? [q.blob.size, q.blob.type] : null), q.imgAt || 0, q.createdAt || 0, qFileName(q),
   q.note || null, ansLabel(q), q.expl || "", q.subject || "", q.tag || "", !!q.cardOnly,
   // only cards that have an explanation image get the extra entry, so existing signatures stay the same
-  ...(hasEimg(q) ? [q.eimg || [q.eblob.size, q.eblob.type], q.eimgAt || 0, ...(q.enote ? [q.enote] : [])] : [])
+  // "e2": explanation images are now redrawn as light JPEGs, so cards exported before that count as changed
+  ...(hasEimg(q) ? [q.eimg || [q.eblob.size, q.eblob.type], q.eimgAt || 0, ...(q.enote ? [q.enote] : []), "e2"] : [])
 ]));
 const ankiChanged = q => S.ankiExp[q.id] !== ankiSig(q);
 function ankiExportPool(opt){
@@ -1717,10 +1718,11 @@ document.addEventListener("keydown", e => {
 
 /* ----- export ----- */
 const CARD_MAX_W = 1600;
+const EXPL_MAX_W = 1200;   // explanation images are often long captures: keep them light enough for Anki on phones
 async function renderCardImage(q, withInk, side = "q"){
   const note = side === "e" ? q.enote : q.note;
   const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = side === "e" ? Store.eimgUrl(q) : Store.img(q); });
-  const W = Math.min(img.naturalWidth, CARD_MAX_W), ih = Math.round(img.naturalHeight * W / img.naturalWidth);
+  const W = Math.min(img.naturalWidth, side === "e" ? EXPL_MAX_W : CARD_MAX_W), ih = Math.round(img.naturalHeight * W / img.naturalWidth);
   let pad = 0;
   if (withInk){   // keep the margin only down to the last stroke, plus a little room
     const r = img.naturalHeight / img.naturalWidth; let maxY = 0;
@@ -1771,12 +1773,8 @@ async function exportAnki(opt){
       let eName = "";
       if (hasEimg(q)){
         try{
-          let data, ext;
-          if (hasEInk(q)){ data = await renderCardImage(q, true, "e"); ext = "jpg"; }   // explanation image with its handwriting
-          else {
-            const eb = await eimgBlob(q); data = new Uint8Array(await eb.arrayBuffer());
-            ext = (/(png|jpe?g|webp|gif)/.exec(eb.type || "") || ["png"])[0].replace("jpeg", "jpg");
-          }
+          // always redraw (with or without handwriting): resized to EXPL_MAX_W and saved as JPEG, never the raw imported file
+          const data = await renderCardImage(q, hasEInk(q), "e"), ext = "jpg";
           eName = base ? uniq(base + "_해설." + ext) : `gichul_${q.id}_e_${crc32(data).toString(16)}.${ext}`;
           media.push({ name: eName, data });
         } catch { eName = ""; }
