@@ -281,6 +281,9 @@ a.mcard:hover{border-color:var(--pencil)}
 .ntitle{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .ntitle b{font-family:var(--serif);font-size:20px}
 .nhead .tools{margin-left:auto}
+.npage{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.npage input{width:4.2em;padding:4px 6px;font:inherit;text-align:center;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit;-moz-appearance:textfield}
+.npage input::-webkit-outer-spin-button,.npage input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .nhead .tools .btn{padding:5px 14px;font-size:20px;line-height:1.2}
 .nopts{display:flex;gap:14px 28px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
 .nsheet{position:relative;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;max-width:960px;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -1426,8 +1429,7 @@ const ankiSig = q => fnv(JSON.stringify([
   q.img || (q.blob ? [q.blob.size, q.blob.type] : null), q.imgAt || 0, q.createdAt || 0, qFileName(q),
   q.note || null, ansLabel(q), q.expl || "", q.subject || "", q.tag || "", !!q.cardOnly,
   // only cards that have an explanation image get the extra entry, so existing signatures stay the same
-  // "e2": explanation images are now redrawn as light JPEGs, so cards exported before that count as changed
-  ...(hasEimg(q) ? [q.eimg || [q.eblob.size, q.eblob.type], q.eimgAt || 0, ...(q.enote ? [q.enote] : []), "e2"] : [])
+  ...(hasEimg(q) ? [q.eimg || [q.eblob.size, q.eblob.type], q.eimgAt || 0, ...(q.enote ? [q.enote] : [])] : [])
 ]));
 const ankiChanged = q => S.ankiExp[q.id] !== ankiSig(q);
 function ankiExportPool(opt){
@@ -1511,7 +1513,7 @@ function renderNote(){
     <div class="nhead">
       <a class="btn ghost" href="#cards">‹ 목록</a>
       <div class="ntitle"><b>${h(q.subject)}</b>${q.tag ? ` <span class="note">${h(q.tag)}</span>` : ""}${q.cardOnly ? "" : ` <span class="note">정답 ${ansLabel(q)}</span>`}</div>
-      <div class="tools"><span class="note" id="nSave"></span><span class="note">${pos + 1} / ${cardsOrder.length}</span>
+      <div class="tools"><span class="note" id="nSave"></span><label class="npage note"><input id="nPage" type="number" inputmode="numeric" enterkeyhint="go" min="1" max="${cardsOrder.length}" value="${pos + 1}" aria-label="이동할 페이지 번호"> / ${cardsOrder.length}</label>
         <button class="btn" id="nPrev" ${pos <= 0 ? "disabled" : ""} aria-label="이전 문제">‹</button><button class="btn" id="nNext" ${pos >= cardsOrder.length - 1 ? "disabled" : ""} aria-label="다음 문제">›</button></div>
     </div>
     <div class="nopts">
@@ -1543,6 +1545,15 @@ function renderNote(){
   const go = d => { const j = pos + d; if (j >= 0 && j < cardsOrder.length) location.replace("#note-" + encodeURIComponent(cardsOrder[j])); };
   $("#nPrev").onclick = () => go(-1);
   $("#nNext").onclick = () => go(1);
+  const pg = $("#nPage");
+  const jump = () => {
+    const n = Math.round(+pg.value);
+    if (!n || n < 1 || n > cardsOrder.length){ toast(`1부터 ${cardsOrder.length} 사이 번호를 넣으세요.`); pg.value = pos + 1; return; }
+    if (n - 1 !== pos) go(n - 1 - pos);
+  };
+  pg.onfocus = () => pg.select();
+  pg.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); pg.blur(); } else if (e.key === "Escape"){ pg.value = pos + 1; pg.blur(); } };
+  pg.onchange = jump;   // fires on Enter / keyboard "이동" / tapping elsewhere
   noteEd.go = go;
   $("#nPad").onclick = e => {
     const b = e.target.closest("[data-pad]"); if (!b) return;
@@ -1718,11 +1729,10 @@ document.addEventListener("keydown", e => {
 
 /* ----- export ----- */
 const CARD_MAX_W = 1600;
-const EXPL_MAX_W = 1200;   // explanation images are often long captures: keep them light enough for Anki on phones
 async function renderCardImage(q, withInk, side = "q"){
   const note = side === "e" ? q.enote : q.note;
   const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = side === "e" ? Store.eimgUrl(q) : Store.img(q); });
-  const W = Math.min(img.naturalWidth, side === "e" ? EXPL_MAX_W : CARD_MAX_W), ih = Math.round(img.naturalHeight * W / img.naturalWidth);
+  const W = Math.min(img.naturalWidth, CARD_MAX_W), ih = Math.round(img.naturalHeight * W / img.naturalWidth);
   let pad = 0;
   if (withInk){   // keep the margin only down to the last stroke, plus a little room
     const r = img.naturalHeight / img.naturalWidth; let maxY = 0;
@@ -1773,8 +1783,12 @@ async function exportAnki(opt){
       let eName = "";
       if (hasEimg(q)){
         try{
-          // always redraw (with or without handwriting): resized to EXPL_MAX_W and saved as JPEG, never the raw imported file
-          const data = await renderCardImage(q, hasEInk(q), "e"), ext = "jpg";
+          let data, ext;
+          if (hasEInk(q)){ data = await renderCardImage(q, true, "e"); ext = "jpg"; }   // explanation image with its handwriting
+          else {
+            const eb = await eimgBlob(q); data = new Uint8Array(await eb.arrayBuffer());
+            ext = (/(png|jpe?g|webp|gif)/.exec(eb.type || "") || ["png"])[0].replace("jpeg", "jpg");
+          }
           eName = base ? uniq(base + "_해설." + ext) : `gichul_${q.id}_e_${crc32(data).toString(16)}.${ext}`;
           media.push({ name: eName, data });
         } catch { eName = ""; }
