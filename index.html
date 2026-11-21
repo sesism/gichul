@@ -65,7 +65,7 @@ h2{font-family:var(--serif);font-weight:700;font-size:20px;margin:32px 0 12px}
 /* controls */
 .field{display:flex;flex-direction:column;gap:6px;min-width:0}
 .field label,.field .lab{font-size:14px;font-weight:600;color:var(--ink-2)}
-input[type=text],input[type=number],select,textarea{background:var(--sheet);border:1px solid var(--line);border-radius:8px;padding:9px 12px;width:100%}
+input[type=text],input[type=number],input[type=search],select,textarea{background:var(--sheet);border:1px solid var(--line);border-radius:8px;padding:9px 12px;width:100%}
 textarea{resize:vertical;min-height:72px;font-family:var(--sans);letter-spacing:.08em}
 .btn{border:1px solid var(--line);background:var(--sheet);border-radius:8px;padding:9px 16px;font-weight:600}
 .btn:hover{border-color:var(--pencil)}
@@ -1398,7 +1398,8 @@ const hasEInk = q => !!(hasEimg(q) && q.enote && q.enote.s && q.enote.s.length);
 const hasAnyInk = q => hasInk(q) || hasEInk(q);
 const inkAt = q => Math.max(hasInk(q) ? q.note.at || 0 : 0, hasEInk(q) ? q.enote.at || 0 : 0);
 let noteSide = "q";   // which image the note editor writes on: "q" question, "e" explanation
-let cardsFilter = { subject: "all", kind: "all" };
+let cardsFilter = { subject: "all", kind: "all", q: "", page: 0 };
+const CARDS_PER_PAGE = 160;
 let cardsOrder = [];
 let noteEd = null;
 let noteTool = ls.get("gm-notetool") || "black";
@@ -1447,9 +1448,17 @@ function cardsPool(subject, kind){
 }
 function renderCards(){
   const st = S.settings, f = cardsFilter, now = Date.now();
-  const list = cardsPool(f.subject, f.kind);
+  const kw = (f.q || "").trim().toLowerCase();
+  const list = cardsPool(f.subject, f.kind).filter(q => !kw || ((q.gname || "") + " " + (q.tag || "")).toLowerCase().includes(kw));
   cardsOrder = list.map(q => q.id);
-  const shown = list.slice(0, 160);
+  const pages = Math.max(1, Math.ceil(list.length / CARDS_PER_PAGE));
+  if (f.goto){ const i = list.findIndex(q => q.id === f.goto); if (i >= 0) f.page = Math.floor(i / CARDS_PER_PAGE); f.goto = null; }
+  f.page = Math.min(Math.max(0, f.page || 0), pages - 1);
+  const start = f.page * CARDS_PER_PAGE, shown = list.slice(start, start + CARDS_PER_PAGE);
+  const pager = pages > 1 ? `<div class="toolbar" style="justify-content:center;gap:8px">
+      <button class="btn" data-pg="first" ${f.page ? "" : "disabled"}>«</button><button class="btn" data-pg="prev" ${f.page ? "" : "disabled"}>‹ 이전</button>
+      <label class="note"><input class="cpg" type="number" inputmode="numeric" min="1" max="${pages}" value="${f.page + 1}" style="width:70px" aria-label="페이지"> / ${pages} 페이지</label>
+      <button class="btn" data-pg="next" ${f.page < pages - 1 ? "" : "disabled"}>다음 ›</button><button class="btn" data-pg="last" ${f.page < pages - 1 ? "" : "disabled"}>»</button></div>` : "";
   const ax = { subject: "all", scope: "done", only: "changed", ...(ls.get("gm-ankiexp") || {}) };
   $("#app").innerHTML = `
     <h1>안키 카드</h1>
@@ -1470,17 +1479,24 @@ function renderCards(){
       <div class="field"><label for="cfk">보기</label><select id="cfk">
         <option value="all">전체</option><option value="todo" ${f.kind==="todo"?"selected":""}>필기 안 한 문제</option>
         <option value="done" ${f.kind==="done"?"selected":""}>필기한 문제</option><option value="cardonly" ${f.kind==="cardonly"?"selected":""}>정답 없이 등록한 문제</option></select></div>
-      <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${shown.length}개 표시` : ""}</span>
+      <div class="field"><label for="cfq">파일 이름 검색</label><input id="cfq" type="search" placeholder="예: 형소법_문제_0443" value="${h(f.q || "")}"></div>
+      <span class="note" style="margin-left:auto">${list.length}문제${list.length > shown.length ? ` 중 ${start + 1}–${start + shown.length}번째 표시` : ""}</span>
     </div>
+    ${pager}
     ${shown.length ? `<div class="qgrid">${shown.map(q => `
       <a class="mcard ccard" href="#note-${q.id}">
         <div class="pthumb"><img src="${h(Store.img(q))}" alt="문제 이미지" loading="lazy"></div>
         <div class="mrow"><span>${h(q.subject)}${q.tag ? " · " + h(q.tag) : ""}</span>${hasAnyInk(q) ? `<span class="inked">필기함${hasEInk(q) ? (hasInk(q) ? " · 해설도" : " · 해설") : ""}</span>` : `<span class="note">필기 전</span>`}</div>
         <div class="mrow"><span class="note">${inkAt(q) ? `${Math.floor((now - inkAt(q))/dayMs) || "오늘"}${Math.floor((now - inkAt(q))/dayMs) ? "일 전" : ""} 수정` : q.cardOnly ? "정답 없음" : `정답 ${ansLabel(q)}`}</span></div>
-      </a>`).join("")}</div>`
+      </a>`).join("")}</div>${pager}`
       : `<div class="empty"><b>${S.questions.size ? "조건에 맞는 문제가 없어요" : "아직 등록한 문제가 없어요"}</b>${S.questions.size ? "다른 보기를 골라보세요." : `<a href="#add">문제 등록</a>에서 이미지를 올려보세요. 정답 없이도 등록할 수 있어요.`}</div>`}`;
-  $("#cfs").onchange = e => { f.subject = e.target.value; renderCards(); };
-  $("#cfk").onchange = e => { f.kind = e.target.value; renderCards(); };
+  $("#cfs").onchange = e => { f.subject = e.target.value; f.page = 0; renderCards(); };
+  $("#cfk").onchange = e => { f.kind = e.target.value; f.page = 0; renderCards(); };
+  let qt = null;
+  $("#cfq").oninput = e => { clearTimeout(qt); qt = setTimeout(() => { f.q = e.target.value; f.page = 0; renderCards(); const el = $("#cfq"); if (el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 300); };
+  const goPage = p => { f.page = p; renderCards(); window.scrollTo(0, 0); };
+  document.querySelectorAll("[data-pg]").forEach(b => b.onclick = () => goPage({ first: 0, prev: f.page - 1, next: f.page + 1, last: pages - 1 }[b.dataset.pg]));
+  document.querySelectorAll(".cpg").forEach(inp => inp.onchange = () => { const v = parseInt(inp.value, 10); if (v >= 1) goPage(v - 1); });
   const sync = () => {
     const a = { subject: $("#axSubj").value, scope: $("#axScope").value, only: $("#axOnly").value };
     ls.set("gm-ankiexp", a);
@@ -1504,6 +1520,7 @@ function renderNote(){
   if (!cardsOrder.includes(id)) cardsOrder = cardsPool(cardsFilter.subject, cardsFilter.kind).map(x => x.id);
   if (!cardsOrder.includes(id)) cardsOrder = cardsPool("all", "all").map(x => x.id);
   const pos = cardsOrder.indexOf(id);
+  cardsFilter.goto = id;   // back to the list: open the page that holds this card
   const side = noteSide === "e" && hasEimg(q) ? "e" : "q";   // noteSide stays "e" so the next card with an explanation opens on it too
   const note = (side === "e" ? q.enote : q.note) || {};
   const inked = side === "e" ? hasEInk(q) : hasInk(q);
