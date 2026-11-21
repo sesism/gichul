@@ -1166,6 +1166,7 @@ function renderManage(){
     else if (act === "allow") abAllow();
     else if (act === "off") { if (confirm("자동 백업을 끌까요? 폴더에 있는 백업 파일은 그대로 남아요.")) abUnlink(); }
     else if (act === "now") abWrite("full");
+    else if (act === "restore") abRestore();
   };
   $("#bkFile").onchange = e => { const file = e.target.files[0]; e.target.value = ""; if (file) importBackup(file); };
   const bd = $("#bulkDel");
@@ -2211,7 +2212,7 @@ async function abInit(){
   if (!AB.supported) return;
   try { AB.dir = (await Local.tx("kv", "readonly", st => st.get("backupDir"))) || null; } catch { AB.dir = null; }
   try { AB.hold = !!(await Local.tx("kv", "readonly", st => st.get("abHold"))); } catch {}
-  if (AB.hold) AB.lastErr = "복구가 덜 끝나서 자동 백업을 멈췄어요. 「복구」를 다시 눌러 남은 문제를 마저 받으세요.";
+  if (AB.hold) AB.lastErr = "복구가 덜 끝나서 자동 백업을 멈췄어요. 「복구 이어하기」를 눌러 남은 문제를 마저 받으세요.";
   if (AB.dir){ try { AB.perm = await AB.dir.queryPermission({ mode: "readwrite" }); } catch { AB.perm = "prompt"; } }
 }
 async function abEnsure(interactive){
@@ -2224,7 +2225,7 @@ async function abEnsure(interactive){
 }
 async function abAllow(){
   if (await abEnsure(true)){
-    if (!S.questions.size && await abHasFiles()) { await abRestore(); return; }
+    if ((!S.questions.size || AB.hold) && await abHasFiles()) { await abRestore(); return; }
     toast("자동 백업을 다시 시작해요.");
     const k = AB.pending; AB.pending = null; if (k) abWrite(k);
   } else toast("폴더 사용을 허용해야 자동 백업이 돼요.");
@@ -2262,7 +2263,7 @@ async function writeFile(dir, name, blob){
 function abWrite(kind){
   if (!AB.dir) return Promise.resolve();
   if (AB.busy){ AB.queued = mergeKind(AB.queued, kind); return AB.busy; }
-  if (AB.hold){ AB.pending = mergeKind(AB.pending, kind); AB.lastErr = "복구가 덜 끝나서 자동 백업을 멈췄어요. 「복구」를 다시 눌러 남은 문제를 마저 받으세요."; return Promise.resolve(); }
+  if (AB.hold){ AB.pending = mergeKind(AB.pending, kind); AB.lastErr = "복구가 덜 끝나서 자동 백업을 멈췄어요. 「복구 이어하기」를 눌러 남은 문제를 마저 받으세요."; return Promise.resolve(); }
   AB.busy = (async () => {
     try{
       if (!(await abEnsure(false))){ AB.pending = mergeKind(AB.pending, kind); return; }
@@ -2321,6 +2322,7 @@ function startBannerHtml(){
   if (AB.supported && AB.dir){
     if (AB.perm !== "granted") return `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">${S.questions.size ? "자동 백업을 이어가려면 백업 폴더 사용을 허용해 주세요." : "저장된 문제가 없어요. 백업 폴더에서 복구할 수 있어요."}</span><button class="btn" data-act="allow">${S.questions.size ? "허용하기" : "복구하기"}</button></div>`;
     if (!S.questions.size) return `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">저장된 문제가 없어요. 백업 폴더에 백업이 있으면 복구할 수 있어요.</span><button class="btn" data-act="restore">복구하기</button></div>`;
+    if (AB.hold) return `<div class="banner" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">복구가 덜 끝나서 자동 백업을 멈췄어요. 이미 받은 문제는 건너뛰고 남은 것만 받아요.</span><button class="btn" data-act="restore">복구 이어하기</button></div>`;
     return AB.lastErr ? `<div class="banner">${AB.lastErr} <a href="#manage">문제 관리</a> 탭에서 확인해 주세요.</div>` : "";
   }
   return `<div class="banner">문제는 이 컴퓨터의 브라우저에만 저장돼요. ${AB.supported ? `<a href="#manage">문제 관리</a> 탭에서 백업 폴더를 지정하면 자동으로 백업돼요.` : `브라우저 데이터를 지우면 함께 사라지니 <a href="#manage">문제 관리</a> 탭에서 백업 파일을 자주 저장해 두세요.`} ${backupNote()}</div>`;
@@ -2334,7 +2336,7 @@ function backupPanelHtml(){
     else if (AB.perm !== "granted"){ status = `<span style="color:var(--warn)">자동 백업이 멈춰 있어요. 폴더 ‘${h(AB.dir.name)}’ 사용을 허용해 주세요.</span>`; btns = `<button class="btn primary" data-act="allow">허용하기</button><button class="btn ghost" data-act="off">끄기</button>`; }
     else {
       status = `폴더 ‘${h(AB.dir.name)}’에 자동 백업 중 · 기록 ${ago(ls.get("gm-lastRec"))} · 문제 이미지 ${ago(ls.get("gm-lastBackup"))}${AB.busy ? " · <b>저장 중…</b>" : ""}${AB.lastErr ? ` · <span style="color:var(--omr)">${AB.lastErr}</span>` : ""}`;
-      btns = `<button class="btn" data-act="now" ${AB.busy ? "disabled" : ""}>지금 백업</button><button class="btn ghost" data-act="pick">폴더 바꾸기</button><button class="btn ghost" data-act="off">끄기</button>`;
+      btns = `${AB.hold ? `<button class="btn primary" data-act="restore">복구 이어하기</button>` : ""}<button class="btn" data-act="now" ${AB.busy ? "disabled" : ""}>지금 백업</button><button class="btn ghost" data-act="pick">폴더 바꾸기</button><button class="btn ghost" data-act="off">끄기</button>`;
     }
     autoRow = `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:220px"><b>자동 백업</b><div class="note">${status}</div></div>${btns}</div>`;
   }
